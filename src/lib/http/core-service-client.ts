@@ -9,7 +9,7 @@ import type {
     AddressData,
     UserData,
     RolePermissionsData,
-} from '../../pkg/http/http-client.interface.js';
+} from './core-service-client.interface.js';
 
 type CoreEnvelope<T> = { success: boolean; data: T };
 

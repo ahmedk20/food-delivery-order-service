@@ -41,6 +41,8 @@ const envSchema = z.object({
     KASHIER_WEBHOOK_SECRET: z.string().min(1),
     KASHIER_BASE_URL: z.string().url().default('https://checkout.kashier.io'),
 
+    APP_BASE_URL: z.string().url().default('http://localhost:3001'),
+
     CORS_ORIGINS: z.string().default('http://localhost:5173'),
 
     COUNTRY_CODE: z.string().length(2).default('EG'),
@@ -83,6 +85,7 @@ export const env = {
     },
 
     coreServiceUrl: data.CORE_SERVICE_URL,
+    appBaseUrl: data.APP_BASE_URL,
 
     kashier: {
         merchantId: data.KASHIER_MERCHANT_ID,

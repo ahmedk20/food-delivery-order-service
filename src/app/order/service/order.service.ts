@@ -4,7 +4,7 @@ import { db } from '../../../lib/knex/knex.js';
 import AppError from '../../../lib/error/AppError.js';
 import { SystemRole } from '../../../lib/auth/enums.js';
 import { parsePaginationQuery, parseFilters } from '../../../lib/http/pagination/parse-query.js';
-import type { ICoreServiceClient } from '../../../pkg/http/http-client.interface.js';
+import type { ICoreServiceClient } from '../../../lib/http/core-service-client.interface.js';
 import type { ICacheProvider } from '../../../pkg/cache/cache.interface.js';
 import type { PlaceOrderDTO } from '../dto/place-order.dto.js';
 import type { CancelOrderDTO } from '../dto/cancel-order.dto.js';
