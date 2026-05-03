@@ -1,25 +1,25 @@
-import axios from 'axios';
-import { injectable } from 'tsyringe';
-import { env } from '../../../lib/config/env.js';
+import { inject, injectable } from 'tsyringe';
+import { TOKENS } from '../../../lib/di/tokens.js';
 import { toMs } from '../../../pkg/utils/time.js';
+import type { ICoreServiceClient } from '../../../pkg/http/http-client.interface.js';
 
 @injectable()
 export class PermissionCacheService {
     private cache: Map<string, { permissions: string[]; cachedAt: number }> = new Map();
     private readonly TTL = toMs(1, 'h');
 
+    constructor(
+        @inject(TOKENS.CoreServiceClient) private readonly coreClient: ICoreServiceClient,
+    ) {}
+
     async getPermissions(roleName: string): Promise<string[]> {
         const cached = this.cache.get(roleName);
-        if (cached && Date.now() - cached.cachedAt < this.TTL) {
-            return cached.permissions;
-        }
+        if (cached && Date.now() - cached.cachedAt < this.TTL) return cached.permissions;
 
-        const { data } = await axios.get<string[]>(
-            `${env.coreServiceUrl}/api/rbac/roles/${encodeURIComponent(roleName)}/permissions`
-        );
-
-        this.cache.set(roleName, { permissions: data, cachedAt: Date.now() });
-        return data;
+        const result = await this.coreClient.getRolePermissions(roleName);
+        const permissions = result.permissions.map(p => p.permission);
+        this.cache.set(roleName, { permissions, cachedAt: Date.now() });
+        return permissions;
     }
 
     hasPermission(permissions: string[], resource: string, action: string): boolean {
