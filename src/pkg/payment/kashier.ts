@@ -51,18 +51,22 @@ export class KashierPaymentProvider implements IPaymentProvider {
     }
 
     verifyWebhookSignature(payload: Record<string, any>, signature: string): boolean {
-        const signatureKeys: string[] = payload.signatureKeys ?? [];
+        if (!signature || typeof signature !== 'string') return false;
+        if (!/^[0-9a-fA-F]+$/.test(signature)) return false;
+
+        const signatureKeys: string[] = Array.isArray(payload.signatureKeys) ? payload.signatureKeys : [];
         const data: Record<string, any> = payload.data ?? {};
+        if (signatureKeys.length === 0) return false;
 
         const sorted = [...signatureKeys].sort();
         const qs = sorted.map(k => `${k}=${data[k]}`).join('&');
 
-        const expected = createHmac('sha256', this.apiKey).update(qs).digest('hex');
+        const expectedHex = createHmac('sha256', this.apiKey).update(qs).digest('hex');
 
-        try {
-            return timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
-        } catch {
-            return false; // buffers differ in length
-        }
+        const expectedBuf = Buffer.from(expectedHex, 'hex');
+        const sigBuf = Buffer.from(signature, 'hex');
+        if (expectedBuf.length !== sigBuf.length) return false;
+
+        return timingSafeEqual(expectedBuf, sigBuf);
     }
 }

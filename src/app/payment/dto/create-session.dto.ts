@@ -7,6 +7,6 @@ export class CreatePaymentSessionDTO {
 
     @IsString()
     @IsNotEmpty()
-    @IsUrl()
+    @IsUrl({ require_tld: false })
     merchantRedirectUrl!: string;
 }

@@ -10,6 +10,7 @@ import type { ICoreServiceClient } from '../../../lib/http/core-service-client.i
 import { findOrderById, updateOrderStatus } from '../../order/repository/order.repo.js';
 import {
     createTransaction,
+    findPendingTransactionByOrderId,
     findTransactionByIdempotencyKey,
     findTransactionByOrderId,
     updateTransaction,
@@ -24,6 +25,8 @@ import { Transaction } from '../entity/transaction.entity.js';
 import type { CreatePaymentSessionDTO } from '../dto/create-session.dto.js';
 import type { TransactionResponseDTO } from '../dto/transaction-response.dto.js';
 import { SystemRole } from '../../../lib/auth/enums.js';
+import { wsServer } from '../../../lib/websocket/ws-server.js';
+import { orderRoom, WS_EVENTS } from '../../../lib/websocket/events.js';
 
 const SESSION_CACHE_TTL = 1800; // 30 minutes
 
@@ -78,16 +81,9 @@ export class PaymentService {
             throw new AppError('Payment provider unavailable', 503);
         }
 
-        // Fetch customer info for Kashier
-        let customerName = 'Customer';
-        let customerEmail = `user${customerId}@placeholder.local`;
-        try {
-            const user = await this.coreClient.getUserById(customerId);
-            customerName = user.name;
-            customerEmail = user.email;
-        } catch (err) {
-            logger.warn('Could not fetch customer info for Kashier session', { customerId });
-        }
+        const user = await this.coreClient.getUserById(customerId);
+        const customerName = user.name;
+        const customerEmail = user.email;
 
         const amountStr = (order.totalAmount / 100).toFixed(2); // piastres → major units
         const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
@@ -153,9 +149,9 @@ export class PaymentService {
             return;
         }
 
-        const tx = await findTransactionByOrderId(Number(orderId), countryCode);
+        const tx = await findPendingTransactionByOrderId(Number(orderId), countryCode);
         if (!tx) {
-            logger.error('Kashier webhook: transaction not found for order', { orderId });
+            logger.error('Kashier webhook: pending transaction not found for order', { orderId });
             throw TransactionNotFoundError();
         }
 
@@ -180,6 +176,18 @@ export class PaymentService {
         // Invalidate caches (fire-and-forget)
         this.cache.delete(`os:order:${orderId}:${countryCode}`).catch(() => {});
         this.cache.delete(sessionCacheKey(Number(orderId))).catch(() => {});
+
+        // Notify subscribers tracking this order
+        const numericOrderId = Number(orderId);
+        wsServer.emit(orderRoom(numericOrderId), WS_EVENTS.PAYMENT_COMPLETED, {
+            orderId: numericOrderId,
+            transactionId: tx.id,
+        });
+        wsServer.emit(orderRoom(numericOrderId), WS_EVENTS.ORDER_STATUS_CHANGED, {
+            orderId: numericOrderId,
+            status: 'confirmed',
+            updatedAt: new Date().toISOString(),
+        });
     };
 
     getTransactionByOrderId = async (

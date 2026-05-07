@@ -41,6 +41,17 @@ export async function findTransactionByOrderId(
     return row ? toEntity(row) : undefined;
 }
 
+export async function findPendingTransactionByOrderId(
+    orderId: number,
+    countryCode: string,
+): Promise<Transaction | undefined> {
+    const row = await db('transactions')
+        .select(COLUMNS)
+        .where({ order_id: orderId, country_code: countryCode, status: 'pending' })
+        .first();
+    return row ? toEntity(row) : undefined;
+}
+
 export async function findTransactionByIdempotencyKey(
     key: string,
     countryCode: string,

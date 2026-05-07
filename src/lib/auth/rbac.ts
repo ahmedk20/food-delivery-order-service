@@ -2,8 +2,9 @@ import type { Request, Response, NextFunction } from 'express';
 import { container } from '../di/container.js';
 import { TOKENS } from '../di/tokens.js';
 import { PermissionCacheService } from '../../app/rbac/service/permission-cache.service.js';
+import AppError from '../error/AppError.js';
 import { SystemRole } from './enums.js';
-import { NotAuthenticated } from './errors.js';
+import { NotAuthenticated, NotAuthorized } from './errors.js';
 
 export interface RBACOptions {
     resource: string;
@@ -12,9 +13,9 @@ export interface RBACOptions {
 }
 
 export function rbac(options: RBACOptions) {
-    return async (req: Request, res: Response, next: NextFunction) => {
+    return async (req: Request, _res: Response, next: NextFunction) => {
         try {
-            if (!req.user) throw NotAuthenticated;
+            if (!req.user) return next(NotAuthenticated);
 
             const { resource, action, allowSystemAdmin = true } = options;
 
@@ -23,15 +24,16 @@ export function rbac(options: RBACOptions) {
             }
 
             if (req.user.role === SystemRole.RESTAURANT_USER) {
+                if (!req.user.restaurantRole) return next(NotAuthorized);
                 const permissionCacheService = container.resolve<PermissionCacheService>(TOKENS.PermissionCacheService);
-                const permissions = await permissionCacheService.getPermissions(req.user.restaurantRole!);
+                const permissions = await permissionCacheService.getPermissions(req.user.restaurantRole);
                 if (!permissionCacheService.hasPermission(permissions, resource, action)) {
-                    return res.status(403).json({ error: 'Permission denied' });
+                    return next(NotAuthorized);
                 }
                 return next();
             }
 
-            return res.status(403).json({ error: 'Permission denied' });
+            return next(NotAuthorized);
         } catch (err) {
             next(err);
         }
@@ -39,46 +41,39 @@ export function rbac(options: RBACOptions) {
 }
 
 export function requireRestaurantMember(paramName: string = 'restaurantId') {
-    return (req: Request, res: Response, next: NextFunction) => {
-        if (!req.user) throw NotAuthenticated;
+    return (req: Request, _res: Response, next: NextFunction) => {
+        if (!req.user) return next(NotAuthenticated);
 
         if (req.user.role === SystemRole.SYSTEM_ADMIN) return next();
 
-        // If a param name is given, verify it matches the JWT restaurantId
         if (paramName && req.params[paramName]) {
-            const restaurantId = parseInt(req.params[paramName] as string);
-            if (Number(req.user.restaurantId) !== restaurantId) {
-                return res.status(403).json({ error: 'Permission denied' });
-            }
+            const restaurantId = parseInt(req.params[paramName] as string, 10);
+            if (Number.isNaN(restaurantId)) return next(new AppError('Invalid restaurantId', 400));
+            if (Number(req.user.restaurantId) !== restaurantId) return next(NotAuthorized);
             return next();
         }
 
-        // No param — just confirm the JWT has a restaurantId (user is some restaurant member)
-        if (!req.user.restaurantId) {
-            return res.status(403).json({ error: 'Permission denied' });
-        }
-
+        if (!req.user.restaurantId) return next(NotAuthorized);
         next();
     };
 }
 
 export function requireBranchAccess(paramName: string = 'branchId') {
-    return (req: Request, res: Response, next: NextFunction) => {
+    return (req: Request, _res: Response, next: NextFunction) => {
         if (!req.user) return next(NotAuthenticated);
 
         if (req.user.role === SystemRole.SYSTEM_ADMIN || req.user.restaurantRole === 'owner') {
             return next();
         }
 
-        const branchId = Number(req.params[paramName] ?? req.query[paramName]);
-        if (!branchId) {
-            return res.status(400).json({ error: 'Branch ID is required' });
+        const raw = req.params[paramName] ?? req.query[paramName];
+        const branchId = Number(raw);
+        if (!Number.isFinite(branchId) || branchId <= 0) {
+            return next(new AppError('Branch ID is required', 400));
         }
 
         const branchIds: number[] = (req.user.branchIds as number[]) ?? [];
-        if (!branchIds.includes(branchId)) {
-            return res.status(403).json({ error: 'Permission denied' });
-        }
+        if (!branchIds.includes(branchId)) return next(NotAuthorized);
 
         next();
     };
@@ -87,7 +82,7 @@ export function requireBranchAccess(paramName: string = 'branchId') {
 export function requireSystemAdmin() {
     return (req: Request, _res: Response, next: NextFunction) => {
         if (!req.user) return next(NotAuthenticated);
-        if (req.user.role !== SystemRole.SYSTEM_ADMIN) return _res.status(403).json({ error: 'Permission denied' });
+        if (req.user.role !== SystemRole.SYSTEM_ADMIN) return next(NotAuthorized);
         next();
     };
 }
@@ -95,7 +90,7 @@ export function requireSystemAdmin() {
 export function requireRole(role: SystemRole | string) {
     return (req: Request, _res: Response, next: NextFunction) => {
         if (!req.user) return next(NotAuthenticated);
-        if (req.user.role !== role) return _res.status(403).json({ error: 'Permission denied' });
+        if (req.user.role !== role) return next(NotAuthorized);
         next();
     };
 }

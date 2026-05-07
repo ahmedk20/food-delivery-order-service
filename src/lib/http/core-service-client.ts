@@ -85,8 +85,8 @@ export class CoreServiceClient implements ICoreServiceClient {
     }
 
     getRolePermissions(roleName: string, correlationId?: string) {
-        return this.getPublic<RolePermissionsData>(
-            `/api/roles/${encodeURIComponent(roleName)}/permissions`,
+        return this.getInternal<RolePermissionsData>(
+            `/api/internal/roles/${encodeURIComponent(roleName)}/permissions`,
             correlationId,
         );
     }

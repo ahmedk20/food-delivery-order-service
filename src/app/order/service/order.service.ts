@@ -28,6 +28,12 @@ import {
     InvalidStatusTransitionError,
     OrderNotFoundError,
 } from '../errors.js';
+import { wsServer } from '../../../lib/websocket/ws-server.js';
+import {
+    orderRoom,
+    restaurantBranchRoom,
+    WS_EVENTS,
+} from '../../../lib/websocket/events.js';
 
 const ORDER_CACHE_TTL = 300;
 
@@ -186,6 +192,16 @@ export class OrderService {
             );
 
             await trx.commit();
+
+            // Notify the restaurant branch dashboard a new order arrived
+            wsServer.emit(restaurantBranchRoom(order.branchId), WS_EVENTS.ORDER_NEW, {
+                orderId: order.id,
+                customerId: order.customerId,
+                itemsTotal: order.itemsTotal,
+                totalAmount: order.totalAmount,
+                createdAt: order.createdAt,
+            });
+
             return toOrderResponseDTO(order, items);
         } catch (err) {
             await trx.rollback();
@@ -219,23 +235,25 @@ export class OrderService {
         userId: number,
         role: string,
     ): Promise<OrderResponseDTO> => {
-        // Try cache first (non-fatal on Redis failure)
-        let cached: string | null = null;
-        try {
-            cached = await this.cache.get(orderCacheKey(id, countryCode));
-        } catch { /* Redis down — fall through to DB */ }
-        if (cached) return JSON.parse(cached) as OrderResponseDTO;
-
+        // Cheap pre-check: load the order header to verify the caller owns it before
+        // we trust the cached payload. Without this, cache lookup would short-circuit
+        // ownership and let any authenticated user read any order id (IDOR).
         const order = await findOrderById(id, countryCode);
         if (!order) throw OrderNotFoundError();
 
-        // Service-level authorization
         if (role === SystemRole.CUSTOMER && order.customerId !== userId) {
             throw new AppError('Forbidden', 403);
         }
         if (role === SystemRole.RESTAURANT_USER || role === SystemRole.DELIVERY_AGENT) {
             throw new AppError('Forbidden', 403);
         }
+
+        // Now the caller is authorized — safe to serve from cache.
+        let cached: string | null = null;
+        try {
+            cached = await this.cache.get(orderCacheKey(id, countryCode));
+        } catch { /* Redis down — fall through to DB */ }
+        if (cached) return JSON.parse(cached) as OrderResponseDTO;
 
         const items = await findItemsByOrderId(id, countryCode);
         const result = toOrderResponseDTO(order, items);
@@ -265,6 +283,12 @@ export class OrderService {
         });
 
         this.cache.delete(orderCacheKey(id, countryCode)).catch(() => {});
+
+        wsServer.emit(orderRoom(id), WS_EVENTS.ORDER_STATUS_CHANGED, {
+            orderId: id,
+            status: updated.status,
+            updatedAt: updated.updatedAt,
+        });
 
         const items = await findItemsByOrderId(id, countryCode);
         return toOrderResponseDTO(updated, items);
