@@ -25,13 +25,20 @@ export class CoreServiceClient implements ICoreServiceClient {
         return { 'x-internal-signature': sig, 'x-internal-timestamp': timestamp };
     }
 
-    private async fetchJson<T>(path: string, headers: Record<string, string>): Promise<T> {
+    private async fetchJson<T>(
+        path: string,
+        headers: Record<string, string>,
+        method: string = 'GET',
+        body?: unknown,
+    ): Promise<T> {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 5_000);
 
         try {
             const res = await fetch(`${env.coreServiceUrl}${path}`, {
+                method,
                 headers,
+                body: body !== undefined ? JSON.stringify(body) : undefined,
                 signal: controller.signal,
             });
 
@@ -67,6 +74,15 @@ export class CoreServiceClient implements ICoreServiceClient {
         return this.fetchJson<T>(path, headers);
     }
 
+    private postInternal<T>(path: string, body: unknown, correlationId?: string): Promise<T> {
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+            ...this.hmacHeaders('POST', path),
+            ...(correlationId ? { 'X-CorrelationId': correlationId } : {}),
+        };
+        return this.fetchJson<T>(path, headers, 'POST', body);
+    }
+
     getProductWithBranchDetails(productId: number, branchId: number, correlationId?: string) {
         return this.getInternal<ProductBranchData>(
             `/api/internal/products/${productId}/branch/${branchId}`,
@@ -95,6 +111,18 @@ export class CoreServiceClient implements ICoreServiceClient {
     getBranchMetadata(branchId: number, correlationId?: string) {
         return this.getInternal<BranchMetadata>(
             `/api/internal/branches/${branchId}`,
+            correlationId,
+        );
+    }
+
+    reserveStock(
+        branchId: number,
+        items: { productId: number; quantity: number }[],
+        correlationId?: string,
+    ): Promise<void> {
+        return this.postInternal<void>(
+            `/api/internal/branches/${branchId}/reserve-stock`,
+            items,
             correlationId,
         );
     }

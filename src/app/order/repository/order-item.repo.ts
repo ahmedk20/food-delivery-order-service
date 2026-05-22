@@ -1,6 +1,6 @@
 import type { Knex } from 'knex';
 import { db } from '../../../lib/knex/knex.js';
-import { OrderItem } from '../entity/order-item.entity.js';
+import { OrderItemEntity } from '../entity/order-item.entity.js';
 
 const COLUMNS = [
     'id', 'order_id', 'region', 'product_id',
@@ -8,8 +8,8 @@ const COLUMNS = [
     'quantity', 'subtotal', 'notes', 'created_at',
 ];
 
-function toEntity(row: any): OrderItem {
-    return new OrderItem({
+function toEntity(row: any): OrderItemEntity {
+    return new OrderItemEntity({
         id:              row.id,
         orderId:         row.order_id,
         region:          row.region,
@@ -25,10 +25,10 @@ function toEntity(row: any): OrderItem {
 }
 
 export async function createOrderItems(
-    items: Omit<OrderItem, 'id' | 'createdAt'>[],
+    items: Omit<OrderItemEntity, 'id' | 'createdAt'>[],
     region: string,
     conn?: Knex,
-): Promise<OrderItem[]> {
+): Promise<OrderItemEntity[]> {
     if (items.length === 0) return [];
     const knex = conn ?? db(region);
     const now  = new Date();
@@ -49,7 +49,7 @@ export async function createOrderItems(
     return rows.map(toEntity);
 }
 
-export async function findItemsByOrderId(orderId: number, region: string): Promise<OrderItem[]> {
+export async function findItemsByOrderId(orderId: number, region: string): Promise<OrderItemEntity[]> {
     const rows = await db(region)('order_items')
         .select(COLUMNS)
         .where({ order_id: orderId });
@@ -57,7 +57,7 @@ export async function findItemsByOrderId(orderId: number, region: string): Promi
 }
 
 // Single IN query — never call this inside a loop (N+1).
-export async function findItemsByOrderIds(orderIds: number[], region: string): Promise<OrderItem[]> {
+export async function findItemsByOrderIds(orderIds: number[], region: string): Promise<OrderItemEntity[]> {
     if (orderIds.length === 0) return [];
     const rows = await db(region)('order_items')
         .select(COLUMNS)

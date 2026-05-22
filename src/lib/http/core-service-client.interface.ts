@@ -42,6 +42,7 @@ export interface BranchMetadata {
     branchId: number;
     restaurantId: number;
     region: string;
+    countryCode: string;
 }
 
 export interface ICoreServiceClient {
@@ -70,4 +71,10 @@ export interface ICoreServiceClient {
         branchId: number,
         correlationId?: string,
     ): Promise<BranchMetadata>;
+
+    reserveStock(
+        branchId: number,
+        items: { productId: number; quantity: number }[],
+        correlationId?: string,
+    ): Promise<void>;
 }

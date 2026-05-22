@@ -1,15 +1,4 @@
-export type OrderStatus =
-    | 'pending'
-    | 'confirmed'
-    | 'preparing'
-    | 'ready_for_pickup'
-    | 'picked_up'
-    | 'on_the_way'
-    | 'delivered'
-    | 'cancelled'
-    | 'failed';
-
-export type PaymentMethod = 'online' | 'cash';
+import type { OrderStatus, PaymentMethod } from '../enums.js';
 
 export interface DeliveryAddressSnapshot {
     id: number;
@@ -24,34 +13,42 @@ export interface DeliveryAddressSnapshot {
     lng: number;
 }
 
-export class Order {
+export class OrderEntity {
     id: number;
-    region: string;          // DB routing key — always pass to db(region)
-    publicId: string;        // UUID exposed to clients; never expose the bigint id
-    countryCode: string;     // business column — drives currencyForCountry()
-    currency: string;        // resolved once at placement; copied to all downstream rows
+    region: string;
+    publicId: string;
+    countryCode: string;
+    currency: string;
     customerId: number;
     restaurantId: number;
     branchId: number;
     deliveryAddressId: number;
+    deliveryLat: number;
+    deliveryLng: number;
     deliveryAddressSnapshot: DeliveryAddressSnapshot;
     deliveryAgentId: number | null;
     status: OrderStatus;
     paymentMethod: PaymentMethod;
-    itemsTotal: number;
+    subtotal: number;
     deliveryFee: number;
+    serviceFee: number;
     discount: number;
-    totalAmount: number;
+    commission: number;
+    total: number;
     notes: string | null;
     estimatedDeliveryAt: Date | null;
-    deliveryStartedAt: Date | null;
+    acceptedAt: Date | null;
+    rejectedAt: Date | null;
+    readyAt: Date | null;
+    assignedAt: Date | null;
+    pickedAt: Date | null;
     deliveredAt: Date | null;
     cancelledAt: Date | null;
     cancellationReason: string | null;
     createdAt: Date;
     updatedAt: Date;
 
-    constructor(data: Partial<Order>) {
+    constructor(data: Partial<OrderEntity>) {
         this.id                      = data.id!;
         this.region                  = data.region!;
         this.publicId                = data.publicId!;
@@ -61,17 +58,25 @@ export class Order {
         this.restaurantId            = data.restaurantId!;
         this.branchId                = data.branchId!;
         this.deliveryAddressId       = data.deliveryAddressId!;
+        this.deliveryLat             = data.deliveryLat!;
+        this.deliveryLng             = data.deliveryLng!;
         this.deliveryAddressSnapshot = data.deliveryAddressSnapshot!;
         this.deliveryAgentId         = data.deliveryAgentId ?? null;
-        this.status                  = data.status ?? 'pending';
+        this.status                  = data.status ?? 'pending_payment';
         this.paymentMethod           = data.paymentMethod!;
-        this.itemsTotal              = data.itemsTotal!;
+        this.subtotal                = data.subtotal!;
         this.deliveryFee             = data.deliveryFee ?? 0;
+        this.serviceFee              = data.serviceFee ?? 0;
         this.discount                = data.discount ?? 0;
-        this.totalAmount             = data.totalAmount!;
+        this.commission              = data.commission ?? 0;
+        this.total                   = data.total!;
         this.notes                   = data.notes ?? null;
         this.estimatedDeliveryAt     = data.estimatedDeliveryAt ?? null;
-        this.deliveryStartedAt       = data.deliveryStartedAt ?? null;
+        this.acceptedAt              = data.acceptedAt ?? null;
+        this.rejectedAt              = data.rejectedAt ?? null;
+        this.readyAt                 = data.readyAt ?? null;
+        this.assignedAt              = data.assignedAt ?? null;
+        this.pickedAt                = data.pickedAt ?? null;
         this.deliveredAt             = data.deliveredAt ?? null;
         this.cancelledAt             = data.cancelledAt ?? null;
         this.cancellationReason      = data.cancellationReason ?? null;

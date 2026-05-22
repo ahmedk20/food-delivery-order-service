@@ -10,6 +10,7 @@ import { OrderController } from './controller/order.controller.js';
 
 const ctrl = container.resolve<OrderController>(TOKENS.OrderController);
 
+// Orders router — placement, detail, and status transitions
 export const orderRouter = Router();
 
 orderRouter.post(
@@ -18,21 +19,24 @@ orderRouter.post(
     ctrl.placeOrder,
 );
 
-orderRouter.get(
-    '/',
-    authenticate, requireRole(SystemRole.CUSTOMER), requireRegion,
-    ctrl.listOrders,
-);
-
-// :publicId — any authenticated role; service layer enforces ownership
+// :publicId — any authenticated role; service enforces ownership
 orderRouter.get(
     '/:publicId',
-    authenticate,
+    authenticate, requireRegion,
     ctrl.getOrderByPublicId,
 );
 
-orderRouter.post(
-    '/:publicId/cancel',
-    authenticate, requireRole(SystemRole.CUSTOMER), requireRegion, idempotency(),
-    ctrl.cancelOrder,
+orderRouter.patch(
+    '/:publicId/status',
+    authenticate, requireRegion, idempotency(),
+    ctrl.updateOrderStatus,
+);
+
+// Customer order list — mounted separately at /customer/orders
+export const customerOrderRouter = Router();
+
+customerOrderRouter.get(
+    '/',
+    authenticate, requireRole(SystemRole.CUSTOMER), requireRegion,
+    ctrl.listOrders,
 );

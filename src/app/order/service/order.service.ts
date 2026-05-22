@@ -7,42 +7,50 @@ import { parsePaginationQuery, parseFilters } from '../../../lib/http/pagination
 import type { ICoreServiceClient } from '../../../lib/http/core-service-client.interface.js';
 import type { ICacheProvider } from '../../../pkg/cache/cache.interface.js';
 import type { ISocketServer } from '../../../lib/websocket/ws-server.js';
+import { currencyForCountry } from '../../../pkg/utils/currency.js';
+import { sumMinor, multiplyMinor } from '../../../pkg/utils/money.js';
 import type { PlaceOrderDTO } from '../dto/place-order.dto.js';
-import type { CancelOrderDTO } from '../dto/cancel-order.dto.js';
+import type { UpdateOrderStatusDTO } from '../dto/update-order-status.dto.js';
 import type {
     OrderItemResponseDTO,
     OrderResponseDTO,
     OrderSummaryResponseDTO,
 } from '../dto/order-response.dto.js';
-import { Order, type DeliveryAddressSnapshot } from '../entity/order.entity.js';
-import { OrderItem } from '../entity/order-item.entity.js';
+import type { OrderListItemDTO } from '../dto/order-list-item.dto.js';
+import { OrderEntity, type DeliveryAddressSnapshot } from '../entity/order.entity.js';
+import { OrderItemEntity } from '../entity/order-item.entity.js';
 import {
     createOrder,
     findOrderById,
     findOrderByPublicId,
-    findOrdersByCustomer,
-    updateOrderStatus,
+    findOrdersByCustomerId,
+    updateOrderStatus as repoUpdateOrderStatus,
     type OrderFilterField,
     type OrderSortField,
 } from '../repository/order.repo.js';
 import { createOrderItems, findItemsByOrderId } from '../repository/order-item.repo.js';
 import {
-    InvalidStatusTransitionError,
     OrderNotFoundError,
+    OrderAccessDeniedError,
+    OrderAlreadyFinalizedError,
+    InvalidStatusTransitionError,
+    CancellationWindowExpiredError,
 } from '../errors.js';
 import {
     orderRoom,
     restaurantBranchRoom,
+    customerRoom,
     WS_EVENTS,
 } from '../../../lib/websocket/events.js';
 
 const ORDER_CACHE_TTL = 300;
+const TERMINAL_STATUSES = new Set(['delivered', 'rejected', 'cancelled']);
 
 function orderCacheKey(region: string, publicId: string): string {
     return `${region}:os:order:${publicId}`;
 }
 
-function toOrderItemResponseDTO(item: OrderItem): OrderItemResponseDTO {
+function toOrderItemResponseDTO(item: OrderItemEntity): OrderItemResponseDTO {
     return {
         id:              item.id,
         productId:       item.productId,
@@ -55,17 +63,19 @@ function toOrderItemResponseDTO(item: OrderItem): OrderItemResponseDTO {
     };
 }
 
-function toOrderSummaryResponseDTO(order: Order): OrderSummaryResponseDTO {
+function toOrderSummaryResponseDTO(order: OrderEntity): OrderSummaryResponseDTO {
     return {
-        id:                  order.publicId,   // expose publicId, never the bigint
+        id:                  order.publicId,
         restaurantId:        order.restaurantId,
         branchId:            order.branchId,
         status:              order.status,
         paymentMethod:       order.paymentMethod,
-        itemsTotal:          order.itemsTotal,
+        subtotal:            order.subtotal,
         deliveryFee:         order.deliveryFee,
+        serviceFee:          order.serviceFee,
         discount:            order.discount,
-        totalAmount:         order.totalAmount,
+        commission:          order.commission,
+        total:               order.total,
         currency:            order.currency,
         notes:               order.notes,
         estimatedDeliveryAt: order.estimatedDeliveryAt,
@@ -75,12 +85,29 @@ function toOrderSummaryResponseDTO(order: Order): OrderSummaryResponseDTO {
     };
 }
 
-function toOrderResponseDTO(order: Order, items: OrderItem[]): OrderResponseDTO {
+function toOrderResponseDTO(order: OrderEntity, items: OrderItemEntity[]): OrderResponseDTO {
     return {
         ...toOrderSummaryResponseDTO(order),
         deliveryAddressSnapshot: order.deliveryAddressSnapshot,
         cancellationReason:      order.cancellationReason,
         items:                   items.map(toOrderItemResponseDTO),
+    };
+}
+
+function toOrderListItemDTO(order: OrderEntity, itemsCount: number): OrderListItemDTO {
+    return {
+        id:          order.publicId,
+        restaurantId: order.restaurantId,
+        branchId:    order.branchId,
+        status:      order.status,
+        paymentMethod: order.paymentMethod,
+        subtotal:    order.subtotal,
+        deliveryFee: order.deliveryFee,
+        serviceFee:  order.serviceFee,
+        total:       order.total,
+        currency:    order.currency,
+        itemsCount,
+        createdAt:   order.createdAt,
     };
 }
 
@@ -98,38 +125,43 @@ export class OrderService {
         dto: PlaceOrderDTO,
         correlationId?: string,
     ): Promise<OrderResponseDTO> => {
-        // 1. Validate all products in parallel
+        // 1. Validate customer, branch metadata, and address in parallel
+        const [, branchMeta, address] = await Promise.all([
+            this.coreClient.getUserById(customerId, correlationId),
+            this.coreClient.getBranchMetadata(dto.branchId, correlationId),
+            this.coreClient.getAddressById(dto.deliveryAddressId, correlationId),
+        ]);
+
+        if (address.userId !== customerId) {
+            throw new AppError('AddressNotFound', 422);
+        }
+
+        // 2. Validate all products in parallel
         const products = await Promise.all(
             dto.items.map(item =>
                 this.coreClient.getProductWithBranchDetails(item.productId, dto.branchId, correlationId),
             ),
         );
 
-        for (let i = 0; i < products.length; i++) {
-            const product = products[i];
-            const item    = dto.items[i];
-            if (!product.isAvailable || product.stock < item.quantity) {
-                throw new AppError(
-                    `Product '${product.name}' is not available or has insufficient stock`,
-                    422,
-                );
-            }
+        const outOfStock = dto.items
+            .map((item, i) => ({ item, product: products[i] }))
+            .filter(({ item, product }) => !product.isAvailable || product.stock < item.quantity)
+            .map(({ product }) => ({ productId: product.id, name: product.name }));
+
+        if (outOfStock.length > 0) {
+            throw new AppError('OutOfStock', 409);
         }
 
         const restaurantId = products[0].restaurantId;
-        for (const product of products) {
-            if (product.restaurantId !== restaurantId) {
-                throw new AppError('All items must be from the same restaurant', 422);
-            }
+        if (products.some(p => p.restaurantId !== restaurantId)) {
+            throw new AppError('AllItemsMustBeFromSameRestaurant', 422);
         }
 
-        // 2. Validate address ownership
-        const address = await this.coreClient.getAddressById(dto.deliveryAddressId, correlationId);
-        if (address.userId !== customerId) {
-            throw new AppError('Address does not belong to you', 403);
-        }
+        // 3. Resolve currency from branch's country code
+        const countryCode = branchMeta.countryCode;
+        const currency    = currencyForCountry(countryCode);
 
-        // 3. Build address snapshot
+        // 4. Build address snapshot
         const snapshot: DeliveryAddressSnapshot = {
             id:              address.id,
             label:           address.label,
@@ -143,38 +175,49 @@ export class OrderService {
             lng:             address.lng,
         };
 
-        // 4. Compute totals (minor currency units)
-        const itemsTotal  = dto.items.reduce((sum, item, i) => sum + products[i].price * item.quantity, 0);
-        const totalAmount = itemsTotal; // deliveryFee and discount are 0 in v1
+        // 5. Compute totals (all in minor currency units)
+        const subtotal    = sumMinor(dto.items.map((item, i) => multiplyMinor(products[i].price, item.quantity)));
+        const deliveryFee = 0;
+        const serviceFee  = 0;
+        const discount    = 0;
+        const commission  = 0;
+        const total       = subtotal + deliveryFee + serviceFee - discount;
 
-        // currency is resolved once at placement from the countryCode on the JWT
-        const countryCode = address.country;
-        const currency    = 'EGP'; // TODO: Phase 3.0 — currencyForCountry(countryCode)
+        // 6. Initial status: online orders wait for payment; COD orders go straight to placed
+        const initialStatus = dto.paymentMethod === 'online' ? 'pending_payment' : 'placed';
 
-        // 5. Persist inside a DB transaction
+        // 7. Persist inside a DB transaction
         const trx = await db(region).transaction();
         try {
             const order = await createOrder(
                 {
                     region,
-                    publicId:                '',   // DB generates via gen_random_uuid()
+                    publicId:                '',
                     countryCode,
                     currency,
                     customerId,
                     restaurantId,
                     branchId:                dto.branchId,
                     deliveryAddressId:       dto.deliveryAddressId,
+                    deliveryLat:             address.lat,
+                    deliveryLng:             address.lng,
                     deliveryAddressSnapshot: snapshot,
                     deliveryAgentId:         null,
-                    status:                  'pending',
+                    status:                  initialStatus,
                     paymentMethod:           dto.paymentMethod,
-                    itemsTotal,
-                    deliveryFee:             0,
-                    discount:                0,
-                    totalAmount,
+                    subtotal,
+                    deliveryFee,
+                    serviceFee,
+                    discount,
+                    commission,
+                    total,
                     notes:                   dto.notes ?? null,
                     estimatedDeliveryAt:     null,
-                    deliveryStartedAt:       null,
+                    acceptedAt:              null,
+                    rejectedAt:              null,
+                    readyAt:                 null,
+                    assignedAt:              null,
+                    pickedAt:                null,
                     deliveredAt:             null,
                     cancelledAt:             null,
                     cancellationReason:      null,
@@ -192,7 +235,7 @@ export class OrderService {
                     productImageUrl: products[i].imageUrl,
                     unitPrice:       products[i].price,
                     quantity:        item.quantity,
-                    subtotal:        products[i].price * item.quantity,
+                    subtotal:        multiplyMinor(products[i].price, item.quantity),
                     notes:           item.notes ?? null,
                 })),
                 region,
@@ -201,13 +244,30 @@ export class OrderService {
 
             await trx.commit();
 
-            // Notify the restaurant branch dashboard a new order arrived
-            this.socket.emitToRoom(restaurantBranchRoom(order.branchId), WS_EVENTS.ORDER_CREATED, {
-                orderId:    order.publicId,
-                customerId: order.customerId,
-                itemsTotal: order.itemsTotal,
-                createdAt:  order.createdAt,
+            // 8. After commit: reserve stock in core service (out-of-transaction)
+            this.coreClient.reserveStock(
+                dto.branchId,
+                dto.items.map((item, i) => ({ productId: products[i].id, quantity: item.quantity })),
+                correlationId,
+            ).catch(async (err) => {
+                // Stock reservation failed post-commit — void the order
+                await repoUpdateOrderStatus(order.id, region, 'cancelled', {
+                    cancelledAt:        new Date(),
+                    cancellationReason: 'out_of_stock_post_commit',
+                });
+                this.cache.delete(orderCacheKey(region, order.publicId)).catch(() => {});
+                throw err;
             });
+
+            // 9. COD orders enter the restaurant queue immediately; online orders wait for payment
+            if (dto.paymentMethod === 'cod') {
+                this.socket.emitToRoom(restaurantBranchRoom(order.branchId), WS_EVENTS.ORDER_CREATED, {
+                    orderId:    order.publicId,
+                    customerId: order.customerId,
+                    subtotal:   order.subtotal,
+                    createdAt:  order.createdAt,
+                });
+            }
 
             return toOrderResponseDTO(order, items);
         } catch (err) {
@@ -221,7 +281,7 @@ export class OrderService {
         region: string,
         query: Record<string, any>,
     ): Promise<{
-        data: OrderSummaryResponseDTO[];
+        data: OrderListItemDTO[];
         meta: { hasMore: boolean; nextCursor: number | null; count: number };
     }> => {
         const pagination = parsePaginationQuery<Record<string, any>, OrderSortField>(
@@ -229,9 +289,9 @@ export class OrderService {
         );
         const filters = parseFilters<Record<string, any>, OrderFilterField>(query, ['status']);
 
-        const result = await findOrdersByCustomer(customerId, region, pagination, filters);
+        const result = await findOrdersByCustomerId(customerId, region, pagination, filters);
         return {
-            data: result.data.map(toOrderSummaryResponseDTO),
+            data: result.data.map(o => toOrderListItemDTO(o, 0)),
             meta: result.meta,
         };
     };
@@ -246,10 +306,10 @@ export class OrderService {
         if (!order) throw OrderNotFoundError();
 
         if (role === SystemRole.CUSTOMER && order.customerId !== userId) {
-            throw new AppError('Forbidden', 403);
+            throw OrderAccessDeniedError();
         }
         if (role === SystemRole.DELIVERY_AGENT) {
-            throw new AppError('Forbidden', 403);
+            throw OrderAccessDeniedError();
         }
 
         let cached: string | null = null;
@@ -267,31 +327,79 @@ export class OrderService {
         return result;
     };
 
-    cancelOrder = async (
+    updateOrderStatus = async (
         publicId: string,
         region: string,
-        customerId: number,
-        dto: CancelOrderDTO,
+        actorId: number,
+        actorRole: string,
+        dto: UpdateOrderStatusDTO,
     ): Promise<OrderResponseDTO> => {
         const order = await findOrderByPublicId(publicId, region);
         if (!order) throw OrderNotFoundError();
 
-        if (order.customerId !== customerId) throw new AppError('Forbidden', 403);
-        if (order.status !== 'pending') throw InvalidStatusTransitionError(order.status);
+        const from = order.status;
+        const to   = dto.status;
 
-        const updated = await updateOrderStatus(order.id, region, 'cancelled', {
-            cancelledAt:        new Date(),
-            cancellationReason: dto.cancellationReason ?? null,
-        });
+        if (TERMINAL_STATUSES.has(from)) throw OrderAlreadyFinalizedError();
+
+        if (actorRole !== SystemRole.SYSTEM_ADMIN) {
+            if (actorRole === SystemRole.CUSTOMER) {
+                if (order.customerId !== actorId) throw OrderAccessDeniedError();
+
+                const allowed: Partial<Record<string, string[]>> = {
+                    pending_payment: ['cancelled'],
+                    placed:          ['cancelled'],
+                };
+                if (!allowed[from]?.includes(to)) throw InvalidStatusTransitionError(from, to);
+
+                // Customer can only cancel placed orders before the restaurant accepts
+                if (from === 'placed' && order.acceptedAt) throw CancellationWindowExpiredError();
+
+            } else if (actorRole === SystemRole.RESTAURANT_USER) {
+                const allowed: Partial<Record<string, string[]>> = {
+                    placed:    ['accepted', 'rejected', 'cancelled'],
+                    accepted:  ['preparing', 'cancelled'],
+                    preparing: ['ready', 'cancelled'],
+                };
+                if (!allowed[from]?.includes(to)) throw InvalidStatusTransitionError(from, to);
+            } else {
+                throw InvalidStatusTransitionError(from, to);
+            }
+        }
+
+        if ((to === 'rejected' || to === 'cancelled') && !dto.reason) {
+            throw new AppError('ReasonRequired', 422);
+        }
+
+        // Build timestamp extras
+        const extra: Parameters<typeof repoUpdateOrderStatus>[3] = {};
+        if (to === 'accepted')  {
+            extra.acceptedAt = new Date();
+            if (dto.estimatedDeliveryAt) extra.estimatedDeliveryAt = new Date(dto.estimatedDeliveryAt);
+        }
+        if (to === 'rejected')  { extra.rejectedAt = new Date(); extra.cancellationReason = dto.reason; }
+        if (to === 'ready')     { extra.readyAt = new Date(); }
+        if (to === 'cancelled') {
+            extra.cancelledAt       = new Date();
+            extra.cancellationReason = dto.reason ?? null;
+        }
+
+        const updated = await repoUpdateOrderStatus(order.id, region, to, extra);
 
         this.cache.delete(orderCacheKey(region, publicId)).catch(() => {});
 
-        this.socket.emitToRoom(orderRoom(order.publicId), WS_EVENTS.ORDER_CANCELLED, {
-            orderId: order.publicId,
-            reason:  dto.cancellationReason ?? null,
-        });
+        const statusPayload = { orderId: publicId, status: to, updatedAt: new Date().toISOString() };
+        this.socket.emitToRoom(orderRoom(publicId), WS_EVENTS.ORDER_STATUS_CHANGED, statusPayload);
+        this.socket.emitToRoom(restaurantBranchRoom(order.branchId), WS_EVENTS.ORDER_STATUS_CHANGED, statusPayload);
+        this.socket.emitToRoom(customerRoom(order.customerId), WS_EVENTS.ORDER_STATUS_CHANGED, statusPayload);
 
-        const items = await findItemsByOrderId(order.id, region);
+        if (to === 'cancelled') {
+            const cancelPayload = { orderId: publicId, reason: dto.reason ?? null, updatedAt: new Date().toISOString() };
+            this.socket.emitToRoom(orderRoom(publicId), WS_EVENTS.ORDER_CANCELLED, cancelPayload);
+            this.socket.emitToRoom(customerRoom(order.customerId), WS_EVENTS.ORDER_CANCELLED, cancelPayload);
+        }
+
+        const items = await findItemsByOrderId(updated.id, region);
         return toOrderResponseDTO(updated, items);
     };
 }

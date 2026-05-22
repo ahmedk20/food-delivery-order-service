@@ -10,7 +10,7 @@ import {
     ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import type { PaymentMethod } from '../entity/order.entity.js';
+import type { PaymentMethod } from '../enums.js';
 
 export class PlaceOrderItemDTO {
     @IsInt()

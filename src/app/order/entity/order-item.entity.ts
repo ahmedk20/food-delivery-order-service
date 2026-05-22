@@ -1,4 +1,4 @@
-export class OrderItem {
+export class OrderItemEntity {
     id: number;
     orderId: number;
     region: string;
@@ -11,7 +11,7 @@ export class OrderItem {
     notes: string | null;
     createdAt: Date;
 
-    constructor(data: Partial<OrderItem>) {
+    constructor(data: Partial<OrderItemEntity>) {
         this.id              = data.id!;
         this.orderId         = data.orderId!;
         this.region          = data.region!;

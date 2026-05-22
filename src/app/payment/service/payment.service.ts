@@ -18,9 +18,9 @@ import {
 import { findPaymentProviderByName } from '../repository/payment-provider.repo.js';
 import {
     InvalidWebhookSignatureError,
-    OrderNotPayableError,
     TransactionNotFoundError,
 } from '../errors.js';
+import { OrderNotPayableError } from '../../order/errors.js';
 import { Transaction } from '../entity/transaction.entity.js';
 import type { CreatePaymentSessionDTO } from '../dto/create-session.dto.js';
 import type { TransactionResponseDTO } from '../dto/transaction-response.dto.js';
@@ -63,8 +63,8 @@ export class PaymentService {
         const order = await findOrderById(dto.orderId, region);
         if (!order) throw new AppError('Order not found', 404);
         if (order.customerId !== customerId) throw new AppError('Forbidden', 403);
-        if (order.paymentMethod !== 'online') throw OrderNotPayableError('Order uses cash payment');
-        if (order.status !== 'pending')      throw OrderNotPayableError('Order is not in a payable state');
+        if (order.paymentMethod !== 'online')       throw OrderNotPayableError();
+        if (order.status !== 'pending_payment')     throw OrderNotPayableError();
 
         let cached: string | null = null;
         try {
@@ -78,7 +78,7 @@ export class PaymentService {
         }
 
         const user      = await this.coreClient.getUserById(customerId);
-        const amountStr = (order.totalAmount / 100).toFixed(2); // minor units → major
+        const amountStr = (order.total / 100).toFixed(2); // minor units → major
         const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
 
         const result = await this.provider.createSession({
@@ -98,7 +98,7 @@ export class PaymentService {
             orderId:            order.id,
             srcAccId:           customerId,  // customer pays
             dstAccId:           null,        // platform receives (NULL = platform)
-            amount:             order.totalAmount,
+            amount:             order.total,
             currency:           order.currency,
             type:               'payment',
             status:             'pending',
@@ -171,7 +171,7 @@ export class PaymentService {
                     metadata:          data,
                 }, trx);
 
-                await updateOrderStatus(orderId, region, 'confirmed', {}, trx);
+                await updateOrderStatus(orderId, region, 'placed', {}, trx);
 
             } else {
                 await updateTransaction(pending.id, region, {
@@ -204,13 +204,13 @@ export class PaymentService {
             });
             this.socket.emitToRoom(orderRoom(updatedOrder.publicId), WS_EVENTS.ORDER_STATUS_CHANGED, {
                 orderId:   updatedOrder.publicId,
-                status:    'confirmed',
+                status:    'placed',
                 updatedAt: new Date().toISOString(),
             });
             this.socket.emitToRoom(restaurantBranchRoom(updatedOrder.branchId), WS_EVENTS.ORDER_CREATED, {
-                orderId:     updatedOrder.publicId,
-                customerId:  updatedOrder.customerId,
-                totalAmount: updatedOrder.totalAmount,
+                orderId:    updatedOrder.publicId,
+                customerId: updatedOrder.customerId,
+                subtotal:   updatedOrder.subtotal,
             });
         } else if (isFailure && updatedOrder) {
             this.socket.emitToRoom(orderRoom(updatedOrder.publicId), WS_EVENTS.PAYMENT_FAILED, {

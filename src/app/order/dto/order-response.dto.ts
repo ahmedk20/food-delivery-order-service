@@ -1,4 +1,5 @@
-import type { DeliveryAddressSnapshot, OrderStatus, PaymentMethod } from '../entity/order.entity.js';
+import type { DeliveryAddressSnapshot } from '../entity/order.entity.js';
+import type { OrderStatus, PaymentMethod } from '../enums.js';
 
 export interface OrderItemResponseDTO {
     id: number;
@@ -12,15 +13,17 @@ export interface OrderItemResponseDTO {
 }
 
 export interface OrderSummaryResponseDTO {
-    id: string;          // publicId (UUID) — the internal bigint is never exposed
+    id: string;
     restaurantId: number;
     branchId: number;
     status: OrderStatus;
     paymentMethod: PaymentMethod;
-    itemsTotal: number;
+    subtotal: number;
     deliveryFee: number;
+    serviceFee: number;
     discount: number;
-    totalAmount: number;
+    commission: number;
+    total: number;
     currency: string;
     notes: string | null;
     estimatedDeliveryAt: Date | null;

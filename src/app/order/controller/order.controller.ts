@@ -4,7 +4,7 @@ import { TOKENS } from '../../../lib/di/tokens.js';
 import { validateBody } from '../../../lib/validation/validate.js';
 import { sendPaginated, sendSuccess } from '../../../lib/http/response.js';
 import { PlaceOrderDTO } from '../dto/place-order.dto.js';
-import { CancelOrderDTO } from '../dto/cancel-order.dto.js';
+import { UpdateOrderStatusDTO } from '../dto/update-order-status.dto.js';
 import { OrderService } from '../service/order.service.js';
 
 @injectable()
@@ -55,13 +55,14 @@ export class OrderController {
         }
     };
 
-    cancelOrder = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    updateOrderStatus = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
         try {
-            const dto    = await validateBody(CancelOrderDTO, req.body);
-            const result = await this.orderService.cancelOrder(
+            const dto    = await validateBody(UpdateOrderStatusDTO, req.body);
+            const result = await this.orderService.updateOrderStatus(
                 String(req.params.publicId),
                 req.region!,
                 req.user!.userId,
+                req.user!.role,
                 dto,
             );
             sendSuccess(res, result);
