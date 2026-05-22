@@ -431,24 +431,32 @@ One row per (restaurant, currency). Composite PK eliminates the need for a separ
 
 ```sql
 CREATE TABLE restaurant_balances (
-    restaurant_id   BIGINT      NOT NULL,   -- logical FK → core.restaurants.id
-    region          TEXT        NOT NULL,
-    currency        CHAR(3)     NOT NULL,
-    balance         INT         NOT NULL DEFAULT 0 CHECK (balance >= 0),
-    updated_at      TIMESTAMP   NOT NULL DEFAULT NOW(),
+    restaurant_id     BIGINT      NOT NULL,   -- logical FK → core.restaurants.id
+    region            TEXT        NOT NULL,
+    currency          CHAR(3)     NOT NULL,
+    available_balance INT         NOT NULL DEFAULT 0 CHECK (available_balance >= 0),  -- ready for payout
+    pending_balance   INT         NOT NULL DEFAULT 0 CHECK (pending_balance >= 0),    -- credited on payment; released on delivery
+    total_earned      INT         NOT NULL DEFAULT 0 CHECK (total_earned >= 0),       -- running total; never decremented
+    created_at        TIMESTAMP   NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMP   NOT NULL DEFAULT NOW(),
     PRIMARY KEY (restaurant_id, currency)
 );
+
+CREATE TRIGGER trg_restaurant_balances_updated_at
+BEFORE UPDATE ON restaurant_balances
+FOR EACH ROW EXECUTE FUNCTION fn_update_updated_at();
 
 -- Single-row lookup by restaurant is the only hot read; PK covers it.
 -- No additional indexes needed.
 ```
 
 **Balance lifecycle:**
-1. Online payment confirmed (Kashier webhook `captured`): `balance += subtotal - commission`.
-2. COD order delivered (agent marks `delivered`): same calculation.
-3. Payout (admin-recorded): `balance -= amount`.
+1. Online payment confirmed (Kashier webhook): `pending_balance += order.subtotal`, `total_earned += order.subtotal`.
+2. COD order delivered: same — credited at delivery confirmation instead of at payment.
+3. Order `delivered`: move earning from pending to available: `available_balance += delta`, `pending_balance -= delta`.
+4. Payout (admin-initiated): `available_balance -= payout.amount`.
 
-Updates use `SELECT ... FOR UPDATE` inside the same transaction as the status transition to prevent concurrent balance drift.
+`creditRestaurantBalance` uses `INSERT ... ON CONFLICT (restaurant_id, currency) DO UPDATE` for atomicity — no separate `SELECT ... FOR UPDATE` is needed.
 
 ---
 

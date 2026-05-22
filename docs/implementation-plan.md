@@ -140,44 +140,57 @@ Repeat for every region you have configured in `REGIONS`.
 - Creates the `fn_update_updated_at()` trigger function used by all mutable tables.
 - Must run **first** — all subsequent migrations reference it.
 
-**1.1** `20260501000002_create_payment_providers.ts`
+**1.1** `20260501000002_enable_pg_partman.ts`
+- Enables the `pg_partman` extension needed by all partitioned tables.
+- Must run **before** any partitioned-table migration (`orders`, `transactions`, `payment_webhook_events`).
+
+**1.2** `20260501000003_create_payment_providers.ts`
 - `payment_providers` table (see database-design.md).
 - No Citus distribution — this is a plain table replicated identically to every per-region
   cluster by running the migration on each shard.
-- Seed: insert `kashier` row.
-- Must run **before** migration 1.3 (`transactions` has a FK to this table).
+- Seed: insert `kashier` and `cod` rows.
+- Must run **before** migration 1.6 (`transactions` has a FK to this table).
 
-**1.2** `20260501000003_create_payment_webhook_events.ts`
+**1.3** `20260501000004_create_payment_webhook_events.ts`
 - `payment_webhook_events` table — dedup store for incoming Kashier webhook deliveries.
-- `UNIQUE (provider_id, provider_event_id)` is the idempotency mechanism; replaces the
-  `idempotency_key` column that used to live on `transactions`.
+- `UNIQUE (provider_id, provider_event_id, created_at)` is the primary idempotency mechanism
+  (partition key included per partitioned-table constraint rules).
 
-**1.3** `20260501000004_create_orders.ts`
-- `orders` table with `BIGSERIAL PRIMARY KEY`, `region TEXT NOT NULL`, check constraints,
-  indexes, `updated_at` trigger.
+**1.4** `20260501000005_create_orders.ts`
+- `orders` table with composite PK `(id, created_at)`, `region TEXT NOT NULL`, check constraints,
+  indexes, `updated_at` trigger. Partitioned monthly by `created_at` via pg_partman.
 - Includes `country_code TEXT NOT NULL` (business column — drives `currencyForCountry()`) and
   `currency CHAR(3) NOT NULL` — populated by the service at write time, never defaulted.
 - No `create_distributed_table` call — each region has its own independent cluster.
 
-**1.4** `20260501000005_create_order_items.ts`
-- `order_items` table, FK to `orders(id)` — simple FK (no `region` component needed).
+**1.5** `20260501000006_create_order_items.ts`
+- `order_items` table. FK to `orders(id)` is logical only — `orders` is a partitioned table.
 
-**1.5** `20260501000006_create_transactions.ts`
-- `transactions` table, FK to `orders(id)` + `payment_providers(id)`.
+**1.6** `20260501000007_create_transactions.ts`
+- `transactions` table. FK to `orders(id)` is logical only (orders is partitioned); real FK to
+  `payment_providers(id)`.
 - Both `src_acc_id` and `dst_acc_id` are nullable (NULL = "platform is the party on that side"),
   guarded by `CHECK (src_acc_id IS NOT NULL OR dst_acc_id IS NOT NULL)`.
 - `currency CHAR(3) NOT NULL` — no `DEFAULT`. Every insert must pass currency explicitly,
   copied from the order.
-- No `idempotency_key` column — webhook dedup is handled by `payment_webhook_events`.
+- `idempotency_key TEXT` with `UNIQUE (idempotency_key, created_at)` — secondary dedup layer for
+  programmatic inserts (retried payouts, refunds). Primary webhook dedup is handled by
+  `payment_webhook_events`.
 
-**1.6** `20260501000007_create_restaurant_balances.ts`
-- `restaurant_balances` table, unique constraint on `(restaurant_id, region)`.
+**1.7** `20260501000008_create_restaurant_balances.ts`
+- `restaurant_balances` table. Composite `PRIMARY KEY (restaurant_id, currency)` — no surrogate key.
+- Three balance columns: `available_balance` (ready for payout), `pending_balance` (credited on
+  payment confirmation; moved to available on delivery), `total_earned` (running total, never
+  decremented).
 
-**1.7** `20260501000008_create_agent_presence.ts`
-- `agent_presence` table, unique constraint on `agent_id`.
+**1.8** `20260501000009_create_agent_presence.ts`
+- `agent_presence` table. `PRIMARY KEY (agent_id)` — one row per agent.
+- `location GEOGRAPHY` is a generated column derived from `last_lat`/`last_lng`; NULL-safe (CASE
+  guard when no location has been sent yet).
 
-**1.8** `20260501000009_create_agent_earnings.ts`
-- `agent_earnings` table, FK to `orders(id)`, unique on `(order_id, region)`.
+**1.9** `20260501000010_create_agent_earnings.ts`
+- `agent_earnings` table. `UNIQUE (delivery_id)` — one earnings record per delivery.
+- FKs to `orders` and `deliveries` are logical only (both partitioned).
 
 **Checkpoint**: `REGION=eg CLUSTER=hot npx knex migrate:latest` runs without error. Inspect
 tables in psql for the `eg` cluster.
@@ -702,7 +715,7 @@ export async function findRestaurantBalance(restaurantId: number, region: string
 ```sql
 INSERT INTO restaurant_balances (restaurant_id, region, pending_balance, total_earned, currency, created_at, updated_at)
 VALUES (:restaurantId, :region, :amount, :amount, :currency, NOW(), NOW())
-ON CONFLICT (restaurant_id, region) DO UPDATE
+ON CONFLICT (restaurant_id, currency) DO UPDATE
 SET pending_balance = restaurant_balances.pending_balance + EXCLUDED.pending_balance,
     total_earned    = restaurant_balances.total_earned    + EXCLUDED.total_earned,
     updated_at      = NOW();
