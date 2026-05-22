@@ -24,7 +24,7 @@ container.registerInstance(TOKENS.SocketServer, socketServer);
 // ── Payment provider ──────────────────────────────────────────────────────────
 container.registerInstance(
     TOKENS.PaymentProvider,
-    new KashierPaymentProvider(env.kashier.apiKey, env.kashier.baseUrl),
+    new KashierPaymentProvider(env.kashier.apiKey, env.kashier.webhookSecret, env.kashier.baseUrl),
 );
 
 // ── App modules ───────────────────────────────────────────────────────────────

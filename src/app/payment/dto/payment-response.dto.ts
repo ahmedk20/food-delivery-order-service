@@ -1,12 +1,14 @@
 import type { TransactionStatus, TransactionType } from '../enums.js';
 
-export interface TransactionResponseDTO {
+export interface PaymentResponseDTO {
     id: number;
     orderPublicId: string | null;
+    type: TransactionType;
+    method: string;
+    status: TransactionStatus;
     amount: number;
     currency: string;
-    type: TransactionType;
-    status: TransactionStatus;
-    providerReferenceId: string | null;
-    createdAt: Date;
+    isRefunded: boolean;
+    refundedPaymentId?: number;
+    createdAt: string;
 }

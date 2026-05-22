@@ -9,6 +9,7 @@ type KashierSessionResponse = {
 export class KashierPaymentProvider implements IPaymentProvider {
     constructor(
         private readonly apiKey: string,
+        private readonly webhookSecret: string,
         private readonly baseUrl: string,
     ) {}
 
@@ -27,7 +28,7 @@ export class KashierPaymentProvider implements IPaymentProvider {
                 body: JSON.stringify({
                     amount: params.amount,
                     currency: params.currency,
-                    order: String(params.orderId),
+                    order: `${params.region}-${params.orderId}`,
                     merchantRedirect: params.merchantRedirectUrl,
                     serverWebhook: params.serverWebhookUrl,
                     customer: params.customer,
@@ -61,7 +62,7 @@ export class KashierPaymentProvider implements IPaymentProvider {
         const sorted = [...signatureKeys].sort();
         const qs = sorted.map(k => `${k}=${data[k]}`).join('&');
 
-        const expectedHex = createHmac('sha256', this.apiKey).update(qs).digest('hex');
+        const expectedHex = createHmac('sha256', this.webhookSecret).update(qs).digest('hex');
 
         const expectedBuf = Buffer.from(expectedHex, 'hex');
         const sigBuf = Buffer.from(signature, 'hex');
