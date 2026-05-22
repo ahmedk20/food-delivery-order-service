@@ -6,6 +6,7 @@ export interface ProductBranchData {
     stock: number;
     isAvailable: boolean;
     restaurantId: number;
+    branchId: number;
 }
 
 export interface AddressData {
@@ -29,11 +30,18 @@ export interface UserData {
     email: string;
     phone: string;
     systemRole: string;
+    deletedAt: Date | null;
 }
 
 export interface RolePermissionsData {
-    role: string;
+    roleName: string;
     permissions: { permission: string }[];
+}
+
+export interface BranchMetadata {
+    branchId: number;
+    restaurantId: number;
+    region: string;
 }
 
 export interface ICoreServiceClient {
@@ -57,4 +65,9 @@ export interface ICoreServiceClient {
         roleName: string,
         correlationId?: string,
     ): Promise<RolePermissionsData>;
+
+    getBranchMetadata(
+        branchId: number,
+        correlationId?: string,
+    ): Promise<BranchMetadata>;
 }

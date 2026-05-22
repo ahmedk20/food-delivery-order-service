@@ -9,6 +9,7 @@ import type {
     AddressData,
     UserData,
     RolePermissionsData,
+    BranchMetadata,
 } from './core-service-client.interface.js';
 
 type CoreEnvelope<T> = { success: boolean; data: T };
@@ -85,8 +86,15 @@ export class CoreServiceClient implements ICoreServiceClient {
     }
 
     getRolePermissions(roleName: string, correlationId?: string) {
-        return this.getInternal<RolePermissionsData>(
-            `/api/internal/roles/${encodeURIComponent(roleName)}/permissions`,
+        return this.getPublic<RolePermissionsData>(
+            `/api/roles/${encodeURIComponent(roleName)}/permissions`,
+            correlationId,
+        );
+    }
+
+    getBranchMetadata(branchId: number, correlationId?: string) {
+        return this.getInternal<BranchMetadata>(
+            `/api/internal/branches/${branchId}`,
             correlationId,
         );
     }
