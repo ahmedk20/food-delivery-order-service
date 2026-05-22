@@ -4,12 +4,14 @@ export const TOKENS = {
     Logger:                 Symbol('Logger'),
     PermissionCacheService: Symbol('PermissionCacheService'),
 
+    // WebSocket server (Phase 5) — services inject ISocketServer, not SocketServer
+    SocketServer: Symbol('SocketServer'),
+
     // HTTP client (Phase 2)
     CoreServiceClient: Symbol('CoreServiceClient'),
 
-    // Messaging (Phase 10)
-    MessagePublisher: Symbol('MessagePublisher'),
-    MessageConsumer:  Symbol('MessageConsumer'),
+    // Messaging (Phase 11)
+    MessageBroker: Symbol('MessageBroker'),
 
     // Orders (Phase 3)
     OrderService:    Symbol('OrderService'),
@@ -20,15 +22,19 @@ export const TOKENS = {
     PaymentController: Symbol('PaymentController'),
     PaymentProvider:   Symbol('PaymentProvider'),
 
-    // Delivery agent (Phase 6)
+    // Delivery (Phase 6)
+    DeliveryService:    Symbol('DeliveryService'),
+    DeliveryController: Symbol('DeliveryController'),
+
+    // Delivery agent (Phase 7)
     AgentService:    Symbol('AgentService'),
     AgentController: Symbol('AgentController'),
 
-    // Restaurant orders (Phase 7)
+    // Restaurant orders (Phase 8)
     RestaurantOrderService:    Symbol('RestaurantOrderService'),
     RestaurantOrderController: Symbol('RestaurantOrderController'),
 
-    // Admin (Phase 8)
+    // Admin (Phase 9)
     AdminService:    Symbol('AdminService'),
     AdminController: Symbol('AdminController'),
 };

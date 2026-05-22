@@ -26,7 +26,10 @@ export interface DeliveryAddressSnapshot {
 
 export class Order {
     id: number;
-    countryCode: string;
+    region: string;          // DB routing key — always pass to db(region)
+    publicId: string;        // UUID exposed to clients; never expose the bigint id
+    countryCode: string;     // business column — drives currencyForCountry()
+    currency: string;        // resolved once at placement; copied to all downstream rows
     customerId: number;
     restaurantId: number;
     branchId: number;
@@ -49,27 +52,30 @@ export class Order {
     updatedAt: Date;
 
     constructor(data: Partial<Order>) {
-        this.id = data.id!;
-        this.countryCode = data.countryCode!;
-        this.customerId = data.customerId!;
-        this.restaurantId = data.restaurantId!;
-        this.branchId = data.branchId!;
-        this.deliveryAddressId = data.deliveryAddressId!;
+        this.id                      = data.id!;
+        this.region                  = data.region!;
+        this.publicId                = data.publicId!;
+        this.countryCode             = data.countryCode!;
+        this.currency                = data.currency!;
+        this.customerId              = data.customerId!;
+        this.restaurantId            = data.restaurantId!;
+        this.branchId                = data.branchId!;
+        this.deliveryAddressId       = data.deliveryAddressId!;
         this.deliveryAddressSnapshot = data.deliveryAddressSnapshot!;
-        this.deliveryAgentId = data.deliveryAgentId ?? null;
-        this.status = data.status ?? 'pending';
-        this.paymentMethod = data.paymentMethod!;
-        this.itemsTotal = data.itemsTotal!;
-        this.deliveryFee = data.deliveryFee ?? 0;
-        this.discount = data.discount ?? 0;
-        this.totalAmount = data.totalAmount!;
-        this.notes = data.notes ?? null;
-        this.estimatedDeliveryAt = data.estimatedDeliveryAt ?? null;
-        this.deliveryStartedAt = data.deliveryStartedAt ?? null;
-        this.deliveredAt = data.deliveredAt ?? null;
-        this.cancelledAt = data.cancelledAt ?? null;
-        this.cancellationReason = data.cancellationReason ?? null;
-        this.createdAt = data.createdAt ?? new Date();
-        this.updatedAt = data.updatedAt ?? new Date();
+        this.deliveryAgentId         = data.deliveryAgentId ?? null;
+        this.status                  = data.status ?? 'pending';
+        this.paymentMethod           = data.paymentMethod!;
+        this.itemsTotal              = data.itemsTotal!;
+        this.deliveryFee             = data.deliveryFee ?? 0;
+        this.discount                = data.discount ?? 0;
+        this.totalAmount             = data.totalAmount!;
+        this.notes                   = data.notes ?? null;
+        this.estimatedDeliveryAt     = data.estimatedDeliveryAt ?? null;
+        this.deliveryStartedAt       = data.deliveryStartedAt ?? null;
+        this.deliveredAt             = data.deliveredAt ?? null;
+        this.cancelledAt             = data.cancelledAt ?? null;
+        this.cancellationReason      = data.cancellationReason ?? null;
+        this.createdAt               = data.createdAt ?? new Date();
+        this.updatedAt               = data.updatedAt ?? new Date();
     }
 }

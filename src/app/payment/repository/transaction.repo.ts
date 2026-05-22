@@ -3,73 +3,65 @@ import { db } from '../../../lib/knex/knex.js';
 import { Transaction } from '../entity/transaction.entity.js';
 
 const COLUMNS = [
-    'id', 'country_code', 'order_id', 'src_acc_id', 'dst_acc_id',
+    'id', 'region', 'order_id', 'src_acc_id', 'dst_acc_id',
     'amount', 'currency', 'type', 'status', 'payment_provider_id',
     'external_reference', 'kashier_order_id', 'metadata',
-    'idempotency_key', 'created_at', 'updated_at',
+    'created_at', 'updated_at',
 ];
 
 function toEntity(row: any): Transaction {
     return new Transaction({
-        id: row.id,
-        countryCode: row.country_code,
-        orderId: row.order_id,
-        srcAccId: row.src_acc_id,
-        dstAccId: row.dst_acc_id,
-        amount: row.amount,
-        currency: row.currency,
-        type: row.type,
-        status: row.status,
+        id:                row.id,
+        region:            row.region,
+        orderId:           row.order_id,
+        srcAccId:          row.src_acc_id,
+        dstAccId:          row.dst_acc_id,
+        amount:            row.amount,
+        currency:          row.currency,
+        type:              row.type,
+        status:            row.status,
         paymentProviderId: row.payment_provider_id,
         externalReference: row.external_reference,
-        kashierOrderId: row.kashier_order_id,
-        metadata: row.metadata,
-        idempotencyKey: row.idempotency_key,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
+        kashierOrderId:    row.kashier_order_id,
+        metadata:          row.metadata,
+        createdAt:         row.created_at,
+        updatedAt:         row.updated_at,
     });
 }
 
-export async function findTransactionByOrderId(
+export async function findTransactionsByOrderId(
     orderId: number,
-    countryCode: string,
-): Promise<Transaction | undefined> {
-    const row = await db('transactions')
+    region: string,
+): Promise<Transaction[]> {
+    const rows = await db(region)('transactions')
         .select(COLUMNS)
-        .where({ order_id: orderId, country_code: countryCode })
-        .first();
-    return row ? toEntity(row) : undefined;
+        .where({ order_id: orderId })
+        .orderBy('created_at', 'asc');
+    return rows.map(toEntity);
 }
 
-export async function findPendingTransactionByOrderId(
+export async function findPendingPaymentByOrderId(
     orderId: number,
-    countryCode: string,
+    region: string,
+    conn?: Knex,
 ): Promise<Transaction | undefined> {
-    const row = await db('transactions')
+    const knex = conn ?? db(region);
+    const row  = await knex('transactions')
         .select(COLUMNS)
-        .where({ order_id: orderId, country_code: countryCode, status: 'pending' })
-        .first();
-    return row ? toEntity(row) : undefined;
-}
-
-export async function findTransactionByIdempotencyKey(
-    key: string,
-    countryCode: string,
-): Promise<Transaction | undefined> {
-    const row = await db('transactions')
-        .select(COLUMNS)
-        .where({ idempotency_key: key, country_code: countryCode })
+        .where({ order_id: orderId, type: 'payment', status: 'pending' })
         .first();
     return row ? toEntity(row) : undefined;
 }
 
 export async function createTransaction(
     data: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>,
-    conn: Knex = db,
+    region: string,
+    conn?: Knex,
 ): Promise<Transaction> {
-    const now = new Date();
-    const [row] = await conn('transactions').insert({
-        country_code:        data.countryCode,
+    const knex = conn ?? db(region);
+    const now  = new Date();
+    const [row] = await knex('transactions').insert({
+        region,
         order_id:            data.orderId,
         src_acc_id:          data.srcAccId,
         dst_acc_id:          data.dstAccId,
@@ -80,8 +72,7 @@ export async function createTransaction(
         payment_provider_id: data.paymentProviderId,
         external_reference:  data.externalReference,
         kashier_order_id:    data.kashierOrderId,
-        metadata:            JSON.stringify(data.metadata),
-        idempotency_key:     data.idempotencyKey,
+        metadata:            JSON.stringify(data.metadata ?? {}),
         created_at:          now,
         updated_at:          now,
     }).returning(COLUMNS);
@@ -90,24 +81,25 @@ export async function createTransaction(
 
 export async function updateTransaction(
     id: number,
-    countryCode: string,
+    region: string,
     updates: Partial<Pick<Transaction,
         | 'status'
+        | 'externalReference'
         | 'kashierOrderId'
-        | 'idempotencyKey'
         | 'metadata'
     >>,
-    conn: Knex = db,
+    conn?: Knex,
 ): Promise<Transaction> {
+    const knex    = conn ?? db(region);
     const payload: Record<string, unknown> = { updated_at: new Date() };
 
-    if (updates.status !== undefined)          payload.status = updates.status;
-    if (updates.kashierOrderId !== undefined)  payload.kashier_order_id = updates.kashierOrderId;
-    if (updates.idempotencyKey !== undefined)  payload.idempotency_key = updates.idempotencyKey;
-    if (updates.metadata !== undefined)        payload.metadata = JSON.stringify(updates.metadata);
+    if (updates.status            !== undefined) payload.status             = updates.status;
+    if (updates.externalReference !== undefined) payload.external_reference = updates.externalReference;
+    if (updates.kashierOrderId    !== undefined) payload.kashier_order_id   = updates.kashierOrderId;
+    if (updates.metadata          !== undefined) payload.metadata           = JSON.stringify(updates.metadata);
 
-    const [row] = await conn('transactions')
-        .where({ id, country_code: countryCode })
+    const [row] = await knex('transactions')
+        .where({ id })
         .update(payload)
         .returning(COLUMNS);
     return toEntity(row);

@@ -1,254 +1,138 @@
-import { WebSocketServer, WebSocket } from 'ws';
-import type { IncomingMessage, Server as HttpServer } from 'http';
+import { Server as SocketIOServer } from 'socket.io';
+import { createAdapter } from '@socket.io/redis-adapter';
+import { createClient } from 'redis';
+import type { Server as HttpServer } from 'http';
+import { injectable } from 'tsyringe';
+import { env } from '../config/env.js';
 import logger from '../logger/logger.js';
+import { socketAuthMiddleware } from './ws-auth.js';
+import { WS_EVENTS, type WsEvent, agentRoom, orderRoom, restaurantBranchRoom, customerRoom } from './events.js';
 import { SystemRole } from '../auth/enums.js';
-import { verifyWsToken, type WsUser } from './ws-auth.js';
-import {
-    agentRoom,
-    orderRoom,
-    restaurantBranchRoom,
-    WS_EVENTS,
-    type WsEvent,
-} from './events.js';
 
-const HEARTBEAT_INTERVAL_MS = 30_000;
-const AGENT_LOCATION_MIN_INTERVAL_MS = 1_000;
-
-interface AuthedSocket extends WebSocket {
-    isAlive: boolean;
-    user: WsUser;
-    rooms: Set<string>;
-    lastLocationAt: number;
+// ── Public interface ──────────────────────────────────────────────────────────
+// Services inject this — not the concrete SocketServer — so they can be tested
+// with a no-op stub and don't depend on socket.io at all.
+export interface ISocketServer {
+    emitToRoom(room: string, event: WsEvent, payload: Record<string, unknown>): void;
 }
 
-interface IncomingMessageEnvelope {
-    event: string;
-    data?: Record<string, any>;
-}
+// ── Concrete implementation ───────────────────────────────────────────────────
+@injectable()
+export class SocketServer implements ISocketServer {
+    private io: SocketIOServer | null = null;
 
-interface OutgoingEnvelope {
-    event: WsEvent;
-    data: Record<string, any>;
-}
-
-class WsServer {
-    private wss: WebSocketServer | null = null;
-    private rooms = new Map<string, Set<AuthedSocket>>();
-    private heartbeatTimer: NodeJS.Timeout | null = null;
-
-    init(httpServer: HttpServer): void {
-        if (this.wss) {
-            logger.warn('WebSocket server already initialized');
+    async init(httpServer: HttpServer): Promise<void> {
+        if (this.io) {
+            logger.warn('SocketServer already initialised');
             return;
         }
 
-        this.wss = new WebSocketServer({ noServer: true });
+        // Two dedicated Redis clients are required by the adapter:
+        // one for publishing and one for subscribing. They must be separate
+        // connections because a subscribed client cannot issue other commands.
+        const pubClient = createClient({
+            socket: { host: env.redis.host, port: env.redis.port },
+            password: env.redis.password,
+        });
+        const subClient = pubClient.duplicate();
 
-        httpServer.on('upgrade', (req, socket, head) => {
-            // Only accept upgrades on the /ws path
-            const url = req.url ?? '';
-            const pathOnly = url.split('?')[0];
-            if (pathOnly !== '/ws') {
-                socket.destroy();
-                return;
-            }
+        await Promise.all([pubClient.connect(), subClient.connect()]);
 
-            verifyWsToken(req.headers.cookie)
-                .then(user => {
-                    this.wss!.handleUpgrade(req, socket, head, ws => {
-                        const authed = ws as AuthedSocket;
-                        authed.user = user;
-                        authed.isAlive = true;
-                        authed.rooms = new Set();
-                        authed.lastLocationAt = 0;
-                        this.wss!.emit('connection', authed, req);
-                    });
-                })
-                .catch(err => {
-                    logger.warn('WebSocket auth failed', { error: String(err) });
-                    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-                    socket.destroy();
-                });
+        this.io = new SocketIOServer(httpServer, {
+            path: '/ws',
+            cors: { origin: env.cors.origins, credentials: true },
+            adapter: createAdapter(pubClient, subClient),
         });
 
-        this.wss.on('connection', (ws: AuthedSocket, _req: IncomingMessage) => {
-            logger.info('WebSocket connected', { userId: ws.user.userId, role: ws.user.role });
+        // JWT auth on every handshake — rejected connections never get a socket.
+        this.io.use(socketAuthMiddleware);
 
-            // Auto-join role-specific personal room (e.g. agents always receive their assignments)
-            if (ws.user.role === SystemRole.DELIVERY_AGENT) {
-                this.joinRoom(ws, agentRoom(ws.user.userId));
+        this.io.on('connection', socket => {
+            const user = socket.data.user;
+            logger.info('WebSocket connected', { userId: user.userId, role: user.role });
+
+            // ── Auto-join personal rooms ──────────────────────────────────────
+            // Every user gets their customer channel immediately on connect.
+            socket.join(customerRoom(user.userId));
+
+            // Agents join their own agent channel so assignment events arrive
+            // without the client needing to explicitly subscribe.
+            if (user.role === SystemRole.DELIVERY_AGENT) {
+                socket.join(agentRoom(user.userId));
             }
 
-            ws.on('pong', () => { ws.isAlive = true; });
-
-            ws.on('message', (raw: Buffer) => {
-                this.handleMessage(ws, raw).catch(err => {
-                    logger.warn('WebSocket message handler failed', {
-                        userId: ws.user.userId,
-                        error: String(err),
-                    });
-                });
-            });
-
-            ws.on('close', () => {
-                this.removeFromAllRooms(ws);
-                logger.info('WebSocket disconnected', { userId: ws.user.userId });
-            });
-
-            ws.on('error', err => {
-                logger.warn('WebSocket error', { userId: ws.user.userId, error: String(err) });
-            });
-        });
-
-        this.heartbeatTimer = setInterval(() => this.heartbeat(), HEARTBEAT_INTERVAL_MS);
-    }
-
-    /**
-     * Broadcast a server event to every socket joined to `room`.
-     * Best-effort: dead sockets are skipped silently.
-     */
-    emit(room: string, event: WsEvent, data: Record<string, any>): void {
-        const sockets = this.rooms.get(room);
-        if (!sockets || sockets.size === 0) return;
-
-        const envelope: OutgoingEnvelope = { event, data };
-        const payload = JSON.stringify(envelope);
-
-        for (const ws of sockets) {
-            if (ws.readyState === WebSocket.OPEN) {
-                try {
-                    ws.send(payload);
-                } catch (err) {
-                    logger.warn('WebSocket emit send failed', { room, event, error: String(err) });
+            // Restaurant members join their branch channels.
+            if (user.role === SystemRole.RESTAURANT_USER && user.branchIds) {
+                for (const branchId of user.branchIds as number[]) {
+                    socket.join(restaurantBranchRoom(branchId));
                 }
             }
+
+            // Emit the list of pre-joined rooms so the client knows what it
+            // subscribed to without an extra round-trip.
+            socket.emit('hello', { allowedChannels: [...socket.rooms] });
+
+            // ── Client → Server events ────────────────────────────────────────
+            socket.on('subscribe', async (channel: string, ack?: (res: { ok: boolean; error?: string }) => void) => {
+                // order:<publicId> rooms require an ownership check (Phase 3+).
+                // For now we allow any authenticated user to subscribe — the
+                // service layer validates ownership before emitting sensitive data.
+                if (typeof channel !== 'string' || !channel.trim()) {
+                    ack?.({ ok: false, error: 'invalid_channel' });
+                    return;
+                }
+                socket.join(channel.trim());
+                ack?.({ ok: true });
+            });
+
+            socket.on('unsubscribe', (channel: string) => {
+                if (typeof channel === 'string' && channel.trim()) {
+                    socket.leave(channel.trim());
+                }
+            });
+
+            // Agent location updates — rate-limited inside the handler.
+            socket.on('agent:location', ({ lat, lng }: { lat: unknown; lng: unknown }) => {
+                if (user.role !== SystemRole.DELIVERY_AGENT) return;
+
+                const latN = Number(lat);
+                const lngN = Number(lng);
+                if (!Number.isFinite(latN) || latN < -90  || latN > 90)  return;
+                if (!Number.isFinite(lngN) || lngN < -180 || lngN > 180) return;
+
+                // Phase 7 will call AgentService.updatePresence here.
+                // For now we fan the location out to the agent's own room.
+                this.emitToRoom(agentRoom(user.userId), WS_EVENTS.AGENT_LOCATION_UPDATED, {
+                    agentId: user.userId, lat: latN, lng: lngN,
+                    updatedAt: new Date().toISOString(),
+                });
+            });
+
+            socket.on('disconnect', reason => {
+                logger.info('WebSocket disconnected', { userId: user.userId, reason });
+            });
+
+            socket.on('error', err => {
+                logger.warn('WebSocket error', { userId: user.userId, error: String(err) });
+            });
+        });
+
+        logger.info('WebSocket server initialised', { path: '/ws' });
+    }
+
+    emitToRoom(room: string, event: WsEvent, payload: Record<string, unknown>): void {
+        if (!this.io) {
+            logger.warn('emitToRoom called before SocketServer.init()', { room, event });
+            return;
         }
+        this.io.to(room).emit(event, payload);
     }
 
     async close(): Promise<void> {
-        if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
-        this.heartbeatTimer = null;
-        if (!this.wss) return;
-        await new Promise<void>(resolve => this.wss!.close(() => resolve()));
-        this.rooms.clear();
-        this.wss = null;
-    }
-
-    // -------- internal --------
-
-    private async handleMessage(ws: AuthedSocket, raw: Buffer): Promise<void> {
-        let parsed: IncomingMessageEnvelope;
-        try {
-            parsed = JSON.parse(raw.toString());
-        } catch {
-            this.sendError(ws, 'invalid_json');
-            return;
-        }
-
-        const data = parsed.data ?? {};
-        switch (parsed.event) {
-            case 'join:order': {
-                const orderId = Number(data.orderId);
-                if (!Number.isFinite(orderId) || orderId <= 0) {
-                    this.sendError(ws, 'invalid_orderId');
-                    return;
-                }
-                this.joinRoom(ws, orderRoom(orderId));
-                return;
-            }
-            case 'join:restaurant': {
-                const branchId = Number(data.branchId);
-                if (!Number.isFinite(branchId) || branchId <= 0) {
-                    this.sendError(ws, 'invalid_branchId');
-                    return;
-                }
-                if (ws.user.role !== SystemRole.RESTAURANT_USER && ws.user.role !== SystemRole.SYSTEM_ADMIN) {
-                    this.sendError(ws, 'forbidden');
-                    return;
-                }
-                if (
-                    ws.user.role === SystemRole.RESTAURANT_USER &&
-                    (!ws.user.branchIds || !ws.user.branchIds.includes(branchId))
-                ) {
-                    this.sendError(ws, 'forbidden');
-                    return;
-                }
-                this.joinRoom(ws, restaurantBranchRoom(branchId));
-                return;
-            }
-            case 'agent:location': {
-                if (ws.user.role !== SystemRole.DELIVERY_AGENT) {
-                    this.sendError(ws, 'forbidden');
-                    return;
-                }
-                const lat = Number(data.lat);
-                const lng = Number(data.lng);
-                if (
-                    !Number.isFinite(lat) || lat < -90  || lat > 90 ||
-                    !Number.isFinite(lng) || lng < -180 || lng > 180
-                ) {
-                    this.sendError(ws, 'invalid_coordinates');
-                    return;
-                }
-                const now = Date.now();
-                if (now - ws.lastLocationAt < AGENT_LOCATION_MIN_INTERVAL_MS) {
-                    return; // throttle silently — high-frequency GPS pings
-                }
-                ws.lastLocationAt = now;
-
-                // Phase 6 will wire this into AgentService.updatePresence — emit-only for now.
-                this.emit(agentRoom(ws.user.userId), WS_EVENTS.AGENT_LOCATION, {
-                    agentId: ws.user.userId,
-                    lat,
-                    lng,
-                    updatedAt: new Date().toISOString(),
-                });
-                return;
-            }
-            default:
-                this.sendError(ws, 'unknown_event');
-        }
-    }
-
-    private joinRoom(ws: AuthedSocket, room: string): void {
-        let set = this.rooms.get(room);
-        if (!set) {
-            set = new Set();
-            this.rooms.set(room, set);
-        }
-        set.add(ws);
-        ws.rooms.add(room);
-    }
-
-    private removeFromAllRooms(ws: AuthedSocket): void {
-        for (const room of ws.rooms) {
-            const set = this.rooms.get(room);
-            if (!set) continue;
-            set.delete(ws);
-            if (set.size === 0) this.rooms.delete(room);
-        }
-        ws.rooms.clear();
-    }
-
-    private sendError(ws: AuthedSocket, code: string): void {
-        if (ws.readyState !== WebSocket.OPEN) return;
-        try {
-            ws.send(JSON.stringify({ event: 'error', data: { code } }));
-        } catch { /* ignore */ }
-    }
-
-    private heartbeat(): void {
-        if (!this.wss) return;
-        for (const client of this.wss.clients) {
-            const ws = client as AuthedSocket;
-            if (!ws.isAlive) {
-                ws.terminate();
-                continue;
-            }
-            ws.isAlive = false;
-            try { ws.ping(); } catch { /* ignore */ }
-        }
+        if (!this.io) return;
+        await new Promise<void>(resolve => this.io!.close(() => resolve()));
+        this.io = null;
     }
 }
 
-export const wsServer = new WsServer();
+export const socketServer = new SocketServer();

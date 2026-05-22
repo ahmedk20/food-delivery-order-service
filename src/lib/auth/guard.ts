@@ -15,7 +15,7 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
         req.user = {
             userId:         payload.userId as number,
             role:           payload.role as string,
-            countryCode:    (payload.countryCode as string) ?? env.countryCode,
+            countryCode:    payload.countryCode as string,
             ...(payload.restaurantId   !== undefined && { restaurantId:   payload.restaurantId   as number }),
             ...(payload.restaurantRole !== undefined && { restaurantRole: payload.restaurantRole as string }),
             ...(payload.branchIds      !== undefined && { branchIds:      payload.branchIds      as number[] }),

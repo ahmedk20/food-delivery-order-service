@@ -1,8 +1,16 @@
-import config from './knexfile.js';
-import knex from 'knex';
+import { type Knex } from 'knex';
+import { getHotShard, getArchiveShard } from './shards.js';
 
-export const db = knex(config);
-
-export async function pingDB() {
-    await db.raw('SELECT 1');
+// db(region) is the primary query interface for all sharded tables.
+// Always pass region from req.region — never hardcode a string.
+export function db(region: string): Knex {
+    return getHotShard(region);
 }
+
+// dbArchive(region) targets the read-replica / cold-storage cluster.
+// Use only for historical reporting queries, never for writes.
+export function dbArchive(region: string): Knex {
+    return getArchiveShard(region);
+}
+
+export { destroyAllShards, pingAll } from './shards.js';

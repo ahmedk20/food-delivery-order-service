@@ -1,3 +1,4 @@
+import type { Socket } from 'socket.io';
 import { jwtVerify } from 'jose';
 import { createSecretKey } from 'crypto';
 import { env } from '../config/env.js';
@@ -11,33 +12,48 @@ export interface WsUser {
     branchIds?: number[];
 }
 
-function parseAccessTokenCookie(cookieHeader: string | undefined): string | null {
+function extractCookieToken(cookieHeader: string | undefined): string | null {
     if (!cookieHeader) return null;
-    const cookies = cookieHeader.split(';').map(c => c.trim());
-    for (const cookie of cookies) {
-        const eq = cookie.indexOf('=');
-        if (eq === -1) continue;
-        const name = cookie.slice(0, eq).trim();
-        if (name === 'access_token') {
-            return decodeURIComponent(cookie.slice(eq + 1).trim());
-        }
+    for (const part of cookieHeader.split(';')) {
+        const [name, ...rest] = part.trim().split('=');
+        if (name.trim() === 'access_token') return decodeURIComponent(rest.join('=').trim());
     }
     return null;
 }
 
-export async function verifyWsToken(cookieHeader: string | undefined): Promise<WsUser> {
-    const token = parseAccessTokenCookie(cookieHeader);
-    if (!token) throw new Error('Missing access_token cookie');
+/**
+ * socket.io handshake middleware.
+ * Token source priority:
+ *   1. socket.handshake.auth.token  — explicit, preferred for native/SPA clients
+ *   2. access_token cookie          — fallback for same-origin browser clients
+ */
+export async function socketAuthMiddleware(
+    socket: Socket,
+    next: (err?: Error) => void,
+): Promise<void> {
+    try {
+        const token: string | undefined =
+            socket.handshake.auth?.token ??
+            extractCookieToken(socket.handshake.headers.cookie);
 
-    const secretKey = createSecretKey(env.jwt.accessSecret, 'utf-8');
-    const { payload } = await jwtVerify(token, secretKey);
+        if (!token) {
+            return next(new Error('unauthorized'));
+        }
 
-    return {
-        userId:      payload.userId as number,
-        role:        payload.role as string,
-        countryCode: (payload.countryCode as string) ?? env.countryCode,
-        ...(payload.restaurantId   !== undefined && { restaurantId:   payload.restaurantId   as number }),
-        ...(payload.restaurantRole !== undefined && { restaurantRole: payload.restaurantRole as string }),
-        ...(payload.branchIds      !== undefined && { branchIds:      payload.branchIds      as number[] }),
-    };
+        const secretKey = createSecretKey(env.jwt.accessSecret, 'utf-8');
+        const { payload } = await jwtVerify(token, secretKey);
+
+        socket.data.user = {
+            userId:      payload.userId as number,
+            role:        payload.role as string,
+            countryCode: payload.countryCode as string,
+            ...(payload.restaurantId   !== undefined && { restaurantId:   payload.restaurantId   as number }),
+            ...(payload.restaurantRole !== undefined && { restaurantRole: payload.restaurantRole as string }),
+            ...(payload.branchIds      !== undefined && { branchIds:      payload.branchIds      as number[] }),
+        } satisfies WsUser;
+
+        next();
+    } catch {
+        next(new Error('unauthorized'));
+    }
 }
