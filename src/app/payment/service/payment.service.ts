@@ -22,7 +22,7 @@ import {
     markWebhookError,
     markWebhookProcessed,
 } from '../repository/webhook-event.repo.js';
-import { creditRestaurantBalance } from '../repository/restaurant-balance.repo.js';
+import { creditRestaurantBalance, debitRestaurantBalance } from '../repository/restaurant-balance.repo.js';
 import {
     InvalidWebhookSignatureError,
     PaymentAlreadyCompletedError,
@@ -298,20 +298,24 @@ export class PaymentService {
         const tx = await findTransactionById(paymentId, region);
         if (!tx) throw TransactionNotFoundError();
 
-        if (actorRole !== SystemRole.SYSTEM_ADMIN) {
-            if (!tx.orderId) throw new AppError('Forbidden', 403);
-            const order = await findOrderById(tx.orderId, region);
-            if (!order || order.customerId !== actorId) throw new AppError('Forbidden', 403);
-            return toPaymentResponseDTO(tx, order.publicId);
+        if (actorRole === SystemRole.SYSTEM_ADMIN) {
+            let orderPublicId: string | null = null;
+            if (tx.orderId) {
+                const order = await findOrderById(tx.orderId, region);
+                orderPublicId = order?.publicId ?? null;
+            }
+            return toPaymentResponseDTO(tx, orderPublicId);
         }
 
-        // Admin: resolve publicId if the transaction has an orderId
-        let orderPublicId: string | null = null;
-        if (tx.orderId) {
-            const order = await findOrderById(tx.orderId, region);
-            orderPublicId = order?.publicId ?? null;
-        }
-        return toPaymentResponseDTO(tx, orderPublicId);
+        if (!tx.orderId) throw new AppError('Forbidden', 403);
+        const order = await findOrderById(tx.orderId, region);
+        if (!order) throw new AppError('Forbidden', 403);
+
+        const isCustomer    = actorRole === SystemRole.CUSTOMER && order.customerId === actorId;
+        const isRestaurant  = actorRole === SystemRole.RESTAURANT_USER && order.restaurantId === actorId;
+        if (!isCustomer && !isRestaurant) throw new AppError('Forbidden', 403);
+
+        return toPaymentResponseDTO(tx, order.publicId);
     };
 
     refundPayment = async (
@@ -323,6 +327,10 @@ export class PaymentService {
         if (!tx) throw TransactionNotFoundError();
         if (tx.status !== 'succeeded' || tx.type !== 'charge') throw PaymentAlreadyCompletedError();
         if (tx.isRefunded) throw PaymentAlreadyCompletedError();
+        if (!tx.orderId) throw new AppError('Cannot refund a transaction with no associated order', 422);
+
+        const order = await findOrderById(tx.orderId, region);
+        if (!order) throw OrderNotFoundError();
 
         const refundAmount = dto.amount ?? tx.amount;
 
@@ -350,6 +358,12 @@ export class PaymentService {
                 isRefunded:        true,
                 refundedPaymentId: refundTx.id,
             }, trx);
+
+            await debitRestaurantBalance(
+                order.restaurantId, region,
+                refundAmount, tx.currency,
+                trx,
+            );
 
             await trx.commit();
 

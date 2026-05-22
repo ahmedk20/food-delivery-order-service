@@ -54,6 +54,27 @@ export async function creditRestaurantBalance(
     `, { restaurantId, region, currency, amount });
 }
 
+// Reverse a previous credit on refund. Drains pending_balance first, then available_balance.
+// PostgreSQL evaluates the original column values for all SET expressions in a single UPDATE,
+// so GREATEST/GREATEST arithmetic here is safe against negative balances.
+export async function debitRestaurantBalance(
+    restaurantId: number,
+    region: string,
+    amount: number,
+    currency: string,
+    conn: Knex,
+): Promise<void> {
+    await conn.raw(`
+        UPDATE restaurant_balances
+        SET
+            pending_balance   = GREATEST(pending_balance - :amount, 0),
+            available_balance = available_balance - GREATEST(:amount - pending_balance, 0),
+            total_earned      = total_earned - :amount,
+            updated_at        = NOW()
+        WHERE restaurant_id = :restaurantId AND currency = :currency
+    `, { restaurantId, currency, amount });
+}
+
 export async function findRestaurantBalance(
     restaurantId: number,
     region: string,
