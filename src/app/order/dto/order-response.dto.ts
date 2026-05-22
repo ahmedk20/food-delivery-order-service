@@ -12,7 +12,7 @@ export interface OrderItemResponseDTO {
 }
 
 export interface OrderSummaryResponseDTO {
-    id: number;
+    id: string;          // publicId (UUID) — the internal bigint is never exposed
     restaurantId: number;
     branchId: number;
     status: OrderStatus;
@@ -21,6 +21,7 @@ export interface OrderSummaryResponseDTO {
     deliveryFee: number;
     discount: number;
     totalAmount: number;
+    currency: string;
     notes: string | null;
     estimatedDeliveryAt: Date | null;
     deliveredAt: Date | null;

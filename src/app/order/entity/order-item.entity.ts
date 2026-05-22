@@ -1,7 +1,7 @@
 export class OrderItem {
     id: number;
     orderId: number;
-    countryCode: string;
+    region: string;
     productId: number;
     productName: string;
     productImageUrl: string | null;
@@ -12,16 +12,16 @@ export class OrderItem {
     createdAt: Date;
 
     constructor(data: Partial<OrderItem>) {
-        this.id = data.id!;
-        this.orderId = data.orderId!;
-        this.countryCode = data.countryCode!;
-        this.productId = data.productId!;
-        this.productName = data.productName!;
+        this.id              = data.id!;
+        this.orderId         = data.orderId!;
+        this.region          = data.region!;
+        this.productId       = data.productId!;
+        this.productName     = data.productName!;
         this.productImageUrl = data.productImageUrl ?? null;
-        this.unitPrice = data.unitPrice!;
-        this.quantity = data.quantity!;
-        this.subtotal = data.subtotal!;
-        this.notes = data.notes ?? null;
-        this.createdAt = data.createdAt ?? new Date();
+        this.unitPrice       = data.unitPrice!;
+        this.quantity        = data.quantity!;
+        this.subtotal        = data.subtotal!;
+        this.notes           = data.notes ?? null;
+        this.createdAt       = data.createdAt ?? new Date();
     }
 }

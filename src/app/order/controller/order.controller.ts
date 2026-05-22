@@ -15,10 +15,10 @@ export class OrderController {
 
     placeOrder = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
         try {
-            const dto = await validateBody(PlaceOrderDTO, req.body);
+            const dto    = await validateBody(PlaceOrderDTO, req.body);
             const result = await this.orderService.placeOrder(
                 req.user!.userId,
-                req.user!.countryCode,
+                req.region!,
                 dto,
                 req.correlationId,
             );
@@ -32,7 +32,7 @@ export class OrderController {
         try {
             const result = await this.orderService.listOrders(
                 req.user!.userId,
-                req.user!.countryCode,
+                req.region!,
                 req.query as Record<string, any>,
             );
             sendPaginated(res, result.data, 200, result.meta);
@@ -41,11 +41,11 @@ export class OrderController {
         }
     };
 
-    getOrderById = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    getOrderByPublicId = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
         try {
-            const order = await this.orderService.getOrderById(
-                Number(req.params.id),
-                req.user!.countryCode,
+            const order = await this.orderService.getOrderByPublicId(
+                String(req.params.publicId),
+                req.region!,
                 req.user!.userId,
                 req.user!.role,
             );
@@ -57,10 +57,10 @@ export class OrderController {
 
     cancelOrder = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
         try {
-            const dto = await validateBody(CancelOrderDTO, req.body);
+            const dto    = await validateBody(CancelOrderDTO, req.body);
             const result = await this.orderService.cancelOrder(
-                Number(req.params.id),
-                req.user!.countryCode,
+                String(req.params.publicId),
+                req.region!,
                 req.user!.userId,
                 dto,
             );

@@ -3,6 +3,7 @@ import { container } from '../../lib/di/container.js';
 import { TOKENS } from '../../lib/di/tokens.js';
 import { authenticate } from '../../lib/auth/guard.js';
 import { requireRole } from '../../lib/auth/rbac.js';
+import { requireRegion } from '../../lib/sharding/region-resolver.js';
 import { idempotency } from '../../lib/http/idempotency.js';
 import { SystemRole } from '../../lib/auth/enums.js';
 import { OrderController } from './controller/order.controller.js';
@@ -13,30 +14,25 @@ export const orderRouter = Router();
 
 orderRouter.post(
     '/',
-    authenticate,
-    requireRole(SystemRole.CUSTOMER),
-    idempotency(),
+    authenticate, requireRole(SystemRole.CUSTOMER), requireRegion, idempotency(),
     ctrl.placeOrder,
 );
 
 orderRouter.get(
     '/',
-    authenticate,
-    requireRole(SystemRole.CUSTOMER),
+    authenticate, requireRole(SystemRole.CUSTOMER), requireRegion,
     ctrl.listOrders,
 );
 
-// any authenticated role — service-level auth enforces ownership
+// :publicId — any authenticated role; service layer enforces ownership
 orderRouter.get(
-    '/:id',
+    '/:publicId',
     authenticate,
-    ctrl.getOrderById,
+    ctrl.getOrderByPublicId,
 );
 
 orderRouter.post(
-    '/:id/cancel',
-    authenticate,
-    requireRole(SystemRole.CUSTOMER),
-    idempotency(),
+    '/:publicId/cancel',
+    authenticate, requireRole(SystemRole.CUSTOMER), requireRegion, idempotency(),
     ctrl.cancelOrder,
 );

@@ -14,10 +14,10 @@ export class PaymentController {
 
     createSession = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
         try {
-            const dto = await validateBody(CreatePaymentSessionDTO, req.body);
+            const dto    = await validateBody(CreatePaymentSessionDTO, req.body);
             const result = await this.paymentService.createSession(
                 req.user!.userId,
-                req.user!.countryCode,
+                req.region!,
                 dto,
             );
             sendSuccess(res, result, 201);
@@ -28,10 +28,10 @@ export class PaymentController {
 
     handleWebhook = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
         try {
-            const signature = req.headers['x-kashier-signature'] as string ?? '';
-            // req.body is a Buffer when express.raw() middleware is applied to this route
-            const payload = JSON.parse(req.body.toString()) as Record<string, any>;
-            await this.paymentService.handleWebhook(req.body as Buffer, signature, payload);
+            const signature = (req.headers['x-kashier-signature'] as string) ?? '';
+            // req.body is a Buffer when express.raw() middleware is applied on this route.
+            const payload = JSON.parse((req.body as Buffer).toString()) as Record<string, any>;
+            await this.paymentService.handleWebhook(signature, payload);
             res.status(200).json({ received: true });
         } catch (err) {
             next(err);
@@ -40,9 +40,9 @@ export class PaymentController {
 
     getByOrderId = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
         try {
-            const result = await this.paymentService.getTransactionByOrderId(
+            const result = await this.paymentService.getTransactionsByOrderId(
                 Number(req.params.orderId),
-                req.user!.countryCode,
+                req.region!,
                 req.user!.userId,
                 req.user!.role,
             );

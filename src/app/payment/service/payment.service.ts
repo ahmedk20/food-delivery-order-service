@@ -190,29 +190,31 @@ export class PaymentService {
         }
 
         // Fire-and-forget cache invalidation
-        this.cache.delete(`${region}:os:order:${order?.publicId}`).catch(() => {});
         this.cache.delete(sessionCacheKey(region, orderId)).catch(() => {});
 
-        const order = await findOrderById(orderId, region);
+        const updatedOrder = await findOrderById(orderId, region);
+        if (updatedOrder) {
+            this.cache.delete(`${region}:os:order:${updatedOrder.publicId}`).catch(() => {});
+        }
 
-        if (isSuccess && order) {
-            this.socket.emitToRoom(orderRoom(order.publicId), WS_EVENTS.PAYMENT_COMPLETED, {
-                orderId:       order.publicId,
-                transactionId: '',  // resolved after commit
+        if (isSuccess && updatedOrder) {
+            this.socket.emitToRoom(orderRoom(updatedOrder.publicId), WS_EVENTS.PAYMENT_COMPLETED, {
+                orderId:       updatedOrder.publicId,
+                transactionId: String(data.transactionId ?? ''),
             });
-            this.socket.emitToRoom(orderRoom(order.publicId), WS_EVENTS.ORDER_STATUS_CHANGED, {
-                orderId:   order.publicId,
+            this.socket.emitToRoom(orderRoom(updatedOrder.publicId), WS_EVENTS.ORDER_STATUS_CHANGED, {
+                orderId:   updatedOrder.publicId,
                 status:    'confirmed',
                 updatedAt: new Date().toISOString(),
             });
-            this.socket.emitToRoom(restaurantBranchRoom(order.branchId), WS_EVENTS.ORDER_CREATED, {
-                orderId:    order.publicId,
-                customerId: order.customerId,
-                totalAmount: order.totalAmount,
+            this.socket.emitToRoom(restaurantBranchRoom(updatedOrder.branchId), WS_EVENTS.ORDER_CREATED, {
+                orderId:     updatedOrder.publicId,
+                customerId:  updatedOrder.customerId,
+                totalAmount: updatedOrder.totalAmount,
             });
-        } else if (isFailure && order) {
-            this.socket.emitToRoom(orderRoom(order.publicId), WS_EVENTS.PAYMENT_FAILED, {
-                orderId: order.publicId,
+        } else if (isFailure && updatedOrder) {
+            this.socket.emitToRoom(orderRoom(updatedOrder.publicId), WS_EVENTS.PAYMENT_FAILED, {
+                orderId: updatedOrder.publicId,
                 reason:  data.failureReason ?? 'unknown',
             });
         }
