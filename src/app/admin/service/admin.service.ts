@@ -22,11 +22,23 @@ import type { Transaction } from '../../payment/entity/transaction.entity.js';
 import type { CreatePayoutDTO } from '../dto/create-payout.dto.js';
 import type { PaginationMeta } from '../../../lib/http/response.js';
 
+const MAX_OUTBOX_ATTEMPTS = 5;
+
 const GEO_SET_KEY        = (region: string) => `presence:geo:${region}`;
 const META_KEY           = (region: string, agentId: number) => `presence:meta:${region}:${agentId}`;
 const BUSY_SET_KEY       = (region: string) => `presence:busy:${region}`;
 const BALANCE_CACHE_TTL  = 5;
 const balanceCacheKey    = (region: string, restaurantId: number) => `${region}:os:balance:${restaurantId}`;
+
+export interface DeadLetterRow {
+    id: number;
+    eventType: string;
+    aggregateId: string;
+    payload: Record<string, unknown>;
+    attempts: number;
+    lastError: string | null;
+    createdAt: Date;
+}
 
 export interface AgentPresenceItem {
     agentId: number;
@@ -192,6 +204,43 @@ export class AdminService {
 
         return {
             data: page,
+            meta: { hasMore, nextCursor, count: page.length },
+        };
+    };
+
+    listDeadLetterOutbox = async (
+        region: string,
+        query: Record<string, any>,
+    ): Promise<{ data: DeadLetterRow[]; meta: PaginationMeta }> => {
+        const limit  = Math.min(Number(query.limit) || 20, 100);
+        const cursor = query.cursor ? Number(query.cursor) : undefined;
+
+        let q = db(region)('outbox')
+            .select(['id', 'event_type', 'aggregate_id', 'payload', 'attempts', 'last_error', 'created_at'])
+            .where('attempts', '>=', MAX_OUTBOX_ATTEMPTS)
+            .whereNull('dispatched_at')
+            .orderBy('created_at', 'asc')
+            .limit(limit + 1);
+
+        if (cursor !== undefined) {
+            q = q.where('id', '>', cursor);
+        }
+
+        const rows = await q;
+        const hasMore    = rows.length > limit;
+        const page       = rows.slice(0, limit);
+        const nextCursor = hasMore ? page[page.length - 1].id : null;
+
+        return {
+            data: page.map((r: any) => ({
+                id:          r.id,
+                eventType:   r.event_type,
+                aggregateId: r.aggregate_id,
+                payload:     r.payload,
+                attempts:    r.attempts,
+                lastError:   r.last_error,
+                createdAt:   r.created_at,
+            })),
             meta: { hasMore, nextCursor, count: page.length },
         };
     };

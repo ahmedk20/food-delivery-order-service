@@ -30,3 +30,7 @@ adminRouter.patch('/orders/:publicId/status',
 
 adminRouter.post('/restaurant/payouts',
     requireConcreteRegion, idempotency(), (req, res, next) => container.resolve<AdminController>(TOKENS.AdminController).createPayout(req, res, next));
+
+// Ops visibility: outbox rows that have exhausted all dispatch attempts
+adminRouter.get('/outbox/dead-letters',
+    requireConcreteRegion, (req, res, next) => container.resolve<AdminController>(TOKENS.AdminController).listDeadLetterOutbox(req, res, next));

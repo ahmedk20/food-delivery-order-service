@@ -61,6 +61,18 @@ export class AdminController {
         }
     };
 
+    listDeadLetterOutbox = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        try {
+            const result = await this.adminService.listDeadLetterOutbox(
+                req.region!,
+                req.query as Record<string, any>,
+            );
+            sendPaginated(res, result.data, 200, result.meta);
+        } catch (err) {
+            next(err);
+        }
+    };
+
     forceUpdateOrderStatus = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
         try {
             const dto    = await validateBody(UpdateOrderStatusDTO, req.body);
