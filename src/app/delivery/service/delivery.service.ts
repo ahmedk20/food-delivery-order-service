@@ -13,6 +13,7 @@ import {
     restaurantBranchRoom,
     customerRoom,
 } from '../../../lib/websocket/events.js';
+import { writeOutboxEvent } from '../../../lib/outbox/writer.js';
 import type { OrderService } from '../../order/service/order.service.js';
 import type { PaymentService } from '../../payment/service/payment.service.js';
 import {
@@ -323,6 +324,13 @@ export class DeliveryService {
                 }, trx);
             }
 
+            await writeOutboxEvent(trx, region, 'order.delivered', String(order.id), {
+                orderId:     order.id,
+                customerId:  order.customerId,
+                agentId,
+                deliveredAt: now.toISOString(),
+            });
+
             await trx.commit();
         } catch (err) {
             await trx.rollback();
@@ -332,6 +340,7 @@ export class DeliveryService {
         // Post-commit side effects (best-effort)
         this.cache.sRem(BUSY_SET_KEY(region), String(agentId)).catch(() => {});
         this.cache.delete(`${region}:os:order:${order.publicId}`).catch(() => {});
+        this.cache.delete(`${region}:os:balance:${order.restaurantId}`).catch(() => {});
 
         const deliveredPayload = {
             orderPublicId: order.publicId,

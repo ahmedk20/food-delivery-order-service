@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '../../../lib/di/tokens.js';
 import { db } from '../../../lib/knex/knex.js';
@@ -44,12 +45,25 @@ import {
     customerRoom,
     WS_EVENTS,
 } from '../../../lib/websocket/events.js';
+import { writeOutboxEvent } from '../../../lib/outbox/writer.js';
 
-const ORDER_CACHE_TTL = 300;
-const TERMINAL_STATUSES = new Set(['delivered', 'rejected', 'cancelled']);
+const ORDER_CACHE_TTL             = 300;
+const CUSTOMER_ORDER_LIST_TTL    = 60;
+const BRANCH_ORDER_LIST_TTL      = 30;
+const TERMINAL_STATUSES          = new Set(['delivered', 'rejected', 'cancelled']);
 
 function orderCacheKey(region: string, publicId: string): string {
     return `${region}:os:order:${publicId}`;
+}
+
+function customerOrderListCacheKey(region: string, customerId: number, query: Record<string, any>): string {
+    const hash = createHash('sha256').update(JSON.stringify(query)).digest('hex').slice(0, 16);
+    return `${region}:os:orders:customer:${customerId}:${hash}`;
+}
+
+function branchOrderListCacheKey(region: string, branchId: number, query: Record<string, any>): string {
+    const hash = createHash('sha256').update(JSON.stringify(query)).digest('hex').slice(0, 16);
+    return `${region}:os:orders:branch:${branchId}:${hash}`;
 }
 
 function toOrderItemResponseDTO(item: OrderItemEntity): OrderItemResponseDTO {
@@ -253,6 +267,14 @@ export class OrderService {
                 );
             }
 
+            await writeOutboxEvent(trx, region, 'order.placed', String(order.id), {
+                orderId:     order.id,
+                restaurantId: order.restaurantId,
+                customerId:  order.customerId,
+                totalAmount: order.total,
+                itemsCount:  items.length,
+            });
+
             await trx.commit();
 
             // 8. After commit: reserve stock in core service (out-of-transaction)
@@ -295,16 +317,26 @@ export class OrderService {
         data: OrderListItemDTO[];
         meta: { hasMore: boolean; nextCursor: number | null; count: number };
     }> => {
+        const cacheKey = customerOrderListCacheKey(region, customerId, query);
+        try {
+            const cached = await this.cache.get(cacheKey);
+            if (cached) return JSON.parse(cached);
+        } catch { /* Redis down — fall through to DB */ }
+
         const pagination = parsePaginationQuery<Record<string, any>, OrderSortField>(
             query, ['id'], 'id',
         );
         const filters = parseFilters<Record<string, any>, OrderFilterField>(query, ['status']);
 
         const result = await findOrdersByCustomerId(customerId, region, pagination, filters);
-        return {
+        const response = {
             data: result.data.map(o => toOrderListItemDTO(o, 0)),
             meta: result.meta,
         };
+
+        this.cache.set(cacheKey, JSON.stringify(response), CUSTOMER_ORDER_LIST_TTL).catch(() => {});
+
+        return response;
     };
 
     listOrdersByBranch = async (
@@ -315,16 +347,26 @@ export class OrderService {
         data: OrderListItemDTO[];
         meta: { hasMore: boolean; nextCursor: number | null; count: number };
     }> => {
+        const cacheKey = branchOrderListCacheKey(region, branchId, query);
+        try {
+            const cached = await this.cache.get(cacheKey);
+            if (cached) return JSON.parse(cached);
+        } catch { /* Redis down — fall through to DB */ }
+
         const pagination = parsePaginationQuery<Record<string, any>, OrderSortField>(
             query, ['id'], 'id',
         );
         const filters = parseFilters<Record<string, any>, OrderFilterField>(query, ['status']);
 
         const result = await findOrdersByBranchId(branchId, region, pagination, filters);
-        return {
+        const response = {
             data: result.data.map(o => toOrderListItemDTO(o, 0)),
             meta: result.meta,
         };
+
+        this.cache.set(cacheKey, JSON.stringify(response), BRANCH_ORDER_LIST_TTL).catch(() => {});
+
+        return response;
     };
 
     getOrderByPublicId = async (
@@ -332,7 +374,7 @@ export class OrderService {
         region: string,
         userId: number,
         role: string,
-    ): Promise<OrderResponseDTO> => {
+    ): Promise<{ data: OrderResponseDTO; fromCache: boolean }> => {
         const order = await findOrderByPublicId(publicId, region);
         if (!order) throw OrderNotFoundError();
 
@@ -347,7 +389,7 @@ export class OrderService {
         try {
             cached = await this.cache.get(orderCacheKey(region, publicId));
         } catch { /* Redis down — fall through to DB */ }
-        if (cached) return JSON.parse(cached) as OrderResponseDTO;
+        if (cached) return { data: JSON.parse(cached) as OrderResponseDTO, fromCache: true };
 
         const items  = await findItemsByOrderId(order.id, region);
         const result = toOrderResponseDTO(order, items);
@@ -355,7 +397,7 @@ export class OrderService {
         this.cache.set(orderCacheKey(region, publicId), JSON.stringify(result), ORDER_CACHE_TTL)
             .catch(() => {});
 
-        return result;
+        return { data: result, fromCache: false };
     };
 
     updateOrderStatus = async (
@@ -415,7 +457,30 @@ export class OrderService {
             extra.cancellationReason = dto.reason ?? null;
         }
 
-        const updated = await repoUpdateOrderStatus(order.id, region, to, extra);
+        const trx = await db(region).transaction();
+        let updated!: OrderEntity;
+        try {
+            updated = await repoUpdateOrderStatus(order.id, region, to, extra, trx);
+
+            await writeOutboxEvent(trx, region, 'order.status_changed', String(order.id), {
+                orderId:   order.id,
+                status:    to,
+                updatedAt: new Date().toISOString(),
+            });
+
+            if (to === 'cancelled') {
+                await writeOutboxEvent(trx, region, 'order.cancelled', String(order.id), {
+                    orderId:    order.id,
+                    customerId: order.customerId,
+                    reason:     dto.reason ?? null,
+                });
+            }
+
+            await trx.commit();
+        } catch (err) {
+            await trx.rollback();
+            throw err;
+        }
 
         this.cache.delete(orderCacheKey(region, publicId)).catch(() => {});
 

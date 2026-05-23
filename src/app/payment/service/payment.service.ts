@@ -42,6 +42,7 @@ import type { TransactionResponseDTO } from '../dto/transaction-response.dto.js'
 import type { PaymentResponseDTO } from '../dto/payment-response.dto.js';
 import { SystemRole } from '../../../lib/auth/enums.js';
 import { orderRoom, restaurantBranchRoom, WS_EVENTS } from '../../../lib/websocket/events.js';
+import { writeOutboxEvent } from '../../../lib/outbox/writer.js';
 
 const SESSION_CACHE_TTL = 1800; // 30 minutes
 
@@ -231,6 +232,13 @@ export class PaymentService {
                     order.subtotal, order.currency,
                     trx,
                 );
+
+                await writeOutboxEvent(trx, region, 'payment.completed', String(orderId), {
+                    orderId,
+                    transactionId: pending.id,
+                    amount:        order.total,
+                    currency:      order.currency,
+                });
             } else {
                 await updateTransaction(pending.id, region, {
                     status:   'failed',
@@ -253,6 +261,9 @@ export class PaymentService {
         const updatedOrder = await findOrderById(orderId, region);
         if (updatedOrder) {
             this.cache.delete(`${region}:os:order:${updatedOrder.publicId}`).catch(() => {});
+            if (isSuccess) {
+                this.cache.delete(`${region}:os:balance:${updatedOrder.restaurantId}`).catch(() => {});
+            }
         }
         this.cache.delete(sessionCacheKey(region, orderId)).catch(() => {});
 
@@ -373,7 +384,8 @@ export class PaymentService {
 
             await trx.commit();
 
-            // TODO: Phase 10 — writeOutboxEvent(trx, region, 'payment.refund_initiated', String(paymentId), { refundId: refundTx.id, amount: refundAmount })
+            this.cache.delete(`${region}:os:balance:${order.restaurantId}`).catch(() => {});
+
             return {
                 refundId: refundTx.id,
                 status:   'pending',

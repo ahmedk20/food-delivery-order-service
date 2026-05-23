@@ -1,6 +1,15 @@
 import type { Knex } from 'knex';
 import { db } from '../../../lib/knex/knex.js';
 import { Transaction } from '../entity/transaction.entity.js';
+import {
+    applyCursorPagination,
+    applyFilters,
+    buildPaginationResult,
+    type FilterParams,
+    type PaginationParams,
+} from '../../../lib/http/pagination/cursor-pagination.js';
+
+export type AdminTxFilterField = 'type' | 'status' | 'order_id';
 
 const COLUMNS = [
     'id', 'region', 'order_id', 'type', 'method',
@@ -31,6 +40,25 @@ function toEntity(row: any): Transaction {
         createdAt:           row.created_at,
         updatedAt:           row.updated_at,
     });
+}
+
+export async function findAllTransactions(
+    region: string,
+    pagination: PaginationParams<Record<string, any>, 'id'>,
+    filters: FilterParams<Record<string, any>, AdminTxFilterField>[],
+): Promise<{ data: Transaction[]; meta: { hasMore: boolean; nextCursor: number | null; count: number } }> {
+    let query = db(region)('transactions').select(COLUMNS);
+    query = applyFilters(query, filters);
+    query = applyCursorPagination(query, pagination);
+
+    const rows = await query;
+    const { rows: data, hasMore, nextCursor } = buildPaginationResult(
+        rows, pagination.limit, pagination.sortBy, pagination.sortOrder,
+    );
+    return {
+        data: data.map(toEntity),
+        meta: { hasMore, nextCursor, count: data.length },
+    };
 }
 
 export async function findTransactionsByOrderId(

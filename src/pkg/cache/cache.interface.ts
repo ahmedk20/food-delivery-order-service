@@ -12,4 +12,11 @@ export interface ICacheProvider {
     geoAdd(key: string, lng: number, lat: number, member: string): Promise<void>;
     geoRem(key: string, member: string): Promise<void>;
     geosearchByRadius(key: string, lng: number, lat: number, radiusMeters: number, count: number): Promise<string[]>;
+    zMembers(key: string): Promise<string[]>;  // ZRANGE 0 -1 — all geo set members
+
+    // Redis Set membership enumeration — used for presence:busy listing (admin)
+    sMembers(key: string): Promise<string[]>;
+
+    // Atomic SETNX — returns true if key was set (first caller), false if it already existed.
+    trySet(key: string, value: string, ttlSeconds: number): Promise<boolean>;
 }

@@ -62,8 +62,28 @@ function toEntity(row: any): OrderEntity {
     });
 }
 
-export type OrderSortField   = 'id';
-export type OrderFilterField = 'status';
+export type OrderSortField         = 'id';
+export type OrderFilterField       = 'status';
+export type AdminOrderFilterField  = 'status' | 'customer_id' | 'restaurant_id' | 'branch_id' | 'delivery_agent_id';
+
+export async function findAllOrders(
+    region: string,
+    pagination: PaginationParams<Record<string, any>, OrderSortField>,
+    filters: FilterParams<Record<string, any>, AdminOrderFilterField>[],
+): Promise<{ data: OrderEntity[]; meta: { hasMore: boolean; nextCursor: number | null; count: number } }> {
+    let query = db(region)('orders').select(COLUMNS);
+    query = applyFilters(query, filters);
+    query = applyCursorPagination(query, pagination);
+
+    const rows = await query;
+    const { rows: data, hasMore, nextCursor } = buildPaginationResult(
+        rows, pagination.limit, pagination.sortBy, pagination.sortOrder,
+    );
+    return {
+        data: data.map(toEntity),
+        meta: { hasMore, nextCursor, count: data.length },
+    };
+}
 
 export async function createOrder(
     data: Omit<OrderEntity, 'id' | 'createdAt' | 'updatedAt'>,

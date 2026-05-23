@@ -62,6 +62,19 @@ export class RedisCacheProvider implements ICacheProvider {
         await this.client.zrem(key, member);
     }
 
+    async zMembers(key: string): Promise<string[]> {
+        return this.client.zrange(key, 0, -1);
+    }
+
+    async sMembers(key: string): Promise<string[]> {
+        return this.client.smembers(key);
+    }
+
+    async trySet(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+        const result = await this.client.set(key, value, 'EX', ttlSeconds, 'NX');
+        return result === 'OK';
+    }
+
     async geosearchByRadius(
         key: string,
         lng: number,

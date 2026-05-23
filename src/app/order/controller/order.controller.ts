@@ -43,13 +43,14 @@ export class OrderController {
 
     getOrderByPublicId = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
         try {
-            const order = await this.orderService.getOrderByPublicId(
+            const { data, fromCache } = await this.orderService.getOrderByPublicId(
                 String(req.params.publicId),
                 req.region!,
                 req.user!.userId,
                 req.user!.role,
             );
-            sendSuccess(res, order);
+            res.set('X-Cache', fromCache ? 'HIT' : 'MISS');
+            sendSuccess(res, data);
         } catch (err) {
             next(err);
         }

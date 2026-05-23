@@ -95,6 +95,50 @@ export async function settleRestaurantBalance(
     `, { restaurantId, amount, commission, currency });
 }
 
+// List all restaurant balances, optionally filtered by restaurantId.
+// Paginated by restaurant_id (ascending).
+export async function findAllRestaurantBalances(
+    region: string,
+    opts: { restaurantId?: number; cursor?: number; limit: number },
+): Promise<{ data: RestaurantBalance[]; meta: { hasMore: boolean; nextCursor: number | null; count: number } }> {
+    let query = db(region)('restaurant_balances').select(COLUMNS).orderBy('restaurant_id', 'asc');
+
+    if (opts.restaurantId !== undefined) {
+        query = query.where({ restaurant_id: opts.restaurantId });
+    }
+    if (opts.cursor !== undefined) {
+        query = query.where('restaurant_id', '>=', opts.cursor);
+    }
+
+    query = query.limit(opts.limit + 1);
+
+    const rows = await query;
+    const hasMore    = rows.length > opts.limit;
+    const data       = rows.slice(0, opts.limit).map(toEntity);
+    const nextCursor = hasMore ? data[data.length - 1].restaurantId : null;
+    return { data, meta: { hasMore, nextCursor, count: data.length } };
+}
+
+// Deduct from available_balance in one atomic UPDATE.
+// Returns true if the update happened (balance was sufficient), false if not.
+export async function payoutFromAvailableBalance(
+    restaurantId: number,
+    region: string,
+    amount: number,
+    currency: string,
+    conn: Knex,
+): Promise<boolean> {
+    const result = await conn.raw(`
+        UPDATE restaurant_balances
+        SET available_balance = available_balance - :amount,
+            updated_at        = NOW()
+        WHERE restaurant_id     = :restaurantId
+          AND currency          = :currency
+          AND available_balance >= :amount
+    `, { restaurantId, currency, amount });
+    return result.rowCount > 0;
+}
+
 export async function findRestaurantBalance(
     restaurantId: number,
     region: string,

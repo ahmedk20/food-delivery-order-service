@@ -5,6 +5,8 @@ import { paymentRouter } from './app/payment/routes.js';
 import { deliveryRouter } from './app/delivery/routes.js';
 import { agentRouter } from './app/delivery-agent/routes.js';
 import { restaurantOrderRouter } from './app/restaurant-orders/routes.js';
+import { adminRouter } from './app/admin/routes.js';
+import { internalRouter } from './app/internal/routes.js';
 
 export const routes = Router();
 
@@ -15,5 +17,5 @@ routes.use('/payments', paymentRouter);
 routes.use('/deliveries', deliveryRouter);
 routes.use('/agents', agentRouter);
 routes.use('/restaurant/orders', restaurantOrderRouter);
-
-// Phase 9: routes.use('/admin', adminRouter);
+routes.use('/admin', adminRouter);
+routes.use('/internal', internalRouter);
