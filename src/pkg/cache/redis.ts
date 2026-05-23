@@ -61,4 +61,17 @@ export class RedisCacheProvider implements ICacheProvider {
         // geo sets are backed by sorted sets; ZREM removes the member
         await this.client.zrem(key, member);
     }
+
+    async geosearchByRadius(
+        key: string,
+        lng: number,
+        lat: number,
+        radiusMeters: number,
+        count: number,
+    ): Promise<string[]> {
+        const result = await (this.client as any).geosearch(
+            key, 'FROMLONLAT', lng, lat, 'BYRADIUS', radiusMeters, 'm', 'ASC', 'COUNT', count,
+        );
+        return (result as string[]) ?? [];
+    }
 }

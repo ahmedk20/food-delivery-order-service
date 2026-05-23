@@ -21,11 +21,6 @@ import {
     createDelivery,
     updateDelivery,
 } from '../repository/delivery.repo.js';
-import {
-    findAgentPresenceById,
-    findNearestAvailableAgents,
-    setAgentAvailability,
-} from '../repository/agent-presence.repo.js';
 import { createAgentEarnings } from '../repository/agent-earnings.repo.js';
 import { incrementReassignmentCount } from '../../order/repository/order.repo.js';
 import {
@@ -44,6 +39,10 @@ import { toDeliveryResponseDTO, type DeliveryResponseDTO } from '../dto/delivery
 import { OrderNotFoundError } from '../../order/errors.js';
 
 const BUSY_SET_KEY = (region: string) => `presence:busy:${region}`;
+const GEO_SET_KEY  = (region: string) => `presence:geo:${region}`;
+const META_KEY     = (region: string, agentId: number) => `presence:meta:${region}:${agentId}`;
+
+const CANDIDATE_LIMIT = 5;
 
 @injectable()
 export class DeliveryService {
@@ -156,7 +155,6 @@ export class DeliveryService {
 
         // Release old agent
         this.cache.sRem(BUSY_SET_KEY(region), String(oldAgentId)).catch(() => {});
-        setAgentAvailability(oldAgentId, true, region).catch(() => {});
         this.socket.emitToRoom(agentRoom(oldAgentId), WS_EVENTS.TASK_CANCELLED, {
             deliveryId: activeDelivery.id,
             reason:     'reassigned',
@@ -223,7 +221,6 @@ export class DeliveryService {
 
             if (to === 'rejected') {
                 this.cache.sRem(BUSY_SET_KEY(region), String(agentId)).catch(() => {});
-                setAgentAvailability(agentId, true, region).catch(() => {});
                 this.socket.emitToRoom(agentRoom(agentId), WS_EVENTS.TASK_CANCELLED, {
                     deliveryId: delivery.id,
                     reason:     dto.reason ?? 'agent_rejected',
@@ -263,28 +260,27 @@ export class DeliveryService {
     // ── Private helpers ───────────────────────────────────────────────────────
 
     private async _validateManualAgent(agentId: number, region: string): Promise<number> {
-        const presence = await findAgentPresenceById(agentId, region);
-        if (!presence || !presence.isOnline || !presence.isAvailable) {
-            throw AgentInActiveDeliveryError();
-        }
-        const isBusy = await this.cache.sIsMember(BUSY_SET_KEY(region), String(agentId))
-            .catch(() => false);
-        if (isBusy) throw AgentInActiveDeliveryError();
+        const [meta, isBusy] = await Promise.all([
+            this.cache.get(META_KEY(region, agentId)).catch(() => null),
+            this.cache.sIsMember(BUSY_SET_KEY(region), String(agentId)).catch(() => false),
+        ]);
+        if (!meta || isBusy) throw AgentInActiveDeliveryError();
         return agentId;
     }
 
-    private async _autoSelectAgent(
-        lat: number,
-        lng: number,
-        region: string,
-    ): Promise<number> {
-        const candidates = await findNearestAvailableAgents(lat, lng, region, 5);
+    private async _autoSelectAgent(lat: number, lng: number, region: string): Promise<number> {
+        // Overscan to absorb agents that fail the freshness/busy filter
+        const raw = await this.cache.geosearchByRadius(
+            GEO_SET_KEY(region), lng, lat, env.delivery.assignmentRadiusMeters, CANDIDATE_LIMIT * 4,
+        );
 
-        for (const candidate of candidates) {
-            const isBusy = await this.cache.sIsMember(
-                BUSY_SET_KEY(region), String(candidate.agentId),
-            ).catch(() => false);
-            if (!isBusy) return candidate.agentId;
+        for (const idStr of raw) {
+            const agentId = Number(idStr);
+            const [meta, isBusy] = await Promise.all([
+                this.cache.get(META_KEY(region, agentId)).catch(() => null),
+                this.cache.sIsMember(BUSY_SET_KEY(region), idStr).catch(() => false),
+            ]);
+            if (meta && !isBusy) return agentId;
         }
 
         throw NoEligibleAgentsError();
@@ -335,7 +331,6 @@ export class DeliveryService {
 
         // Post-commit side effects (best-effort)
         this.cache.sRem(BUSY_SET_KEY(region), String(agentId)).catch(() => {});
-        setAgentAvailability(agentId, true, region).catch(() => {});
         this.cache.delete(`${region}:os:order:${order.publicId}`).catch(() => {});
 
         const deliveredPayload = {

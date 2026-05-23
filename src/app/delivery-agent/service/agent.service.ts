@@ -3,7 +3,6 @@ import { TOKENS } from '../../../lib/di/tokens.js';
 import { env } from '../../../lib/config/env.js';
 import type { ICacheProvider } from '../../../pkg/cache/cache.interface.js';
 import { AgentInActiveDeliveryError, NotOnlineError } from '../errors.js';
-import { findPresenceByAgentId, upsertPresence } from '../repository/agent-presence.repo.js';
 import { findEarningsByAgentId, getEarningsTotals } from '../repository/agent-earnings.repo.js';
 import { findTasksByAgentId } from '../repository/delivery-task.repo.js';
 import {
@@ -33,62 +32,32 @@ export class AgentService {
     ) {}
 
     goOnline = async (agentId: number, region: string, dto: PresenceOnlineDTO): Promise<void> => {
-        await upsertPresence({
-            agentId,
-            region,
-            isOnline:    true,
-            isAvailable: true,
-            lastLat:     dto.lat,
-            lastLng:     dto.lng,
-        });
-
-        // Register in Redis geo set (primary path for agent auto-selection)
-        this.cache.geoAdd(GEO_SET_KEY(region), dto.lng, dto.lat, String(agentId)).catch(() => {});
-
-        // Write meta key so ping can validate online status without hitting the DB
+        await this.cache.geoAdd(GEO_SET_KEY(region), dto.lng, dto.lat, String(agentId));
         await this.cache.set(
             META_KEY(region, agentId),
-            JSON.stringify({ isOnline: true, lastSeenAt: new Date().toISOString() }),
+            JSON.stringify({ lat: dto.lat, lng: dto.lng, lastSeenAt: new Date().toISOString() }),
             env.delivery.presenceStaleSec,
         );
     };
 
     goOffline = async (agentId: number, region: string): Promise<void> => {
-        // Block offline if the agent has an active delivery
         const isBusy = await this.cache.sIsMember(BUSY_SET_KEY(region), String(agentId))
             .catch(() => false);
         if (isBusy) throw AgentInActiveDeliveryError();
-
-        await upsertPresence({
-            agentId,
-            region,
-            isOnline:    false,
-            isAvailable: false,
-            lastLat:     null,
-            lastLng:     null,
-        });
 
         this.cache.geoRem(GEO_SET_KEY(region), String(agentId)).catch(() => {});
         this.cache.delete(META_KEY(region, agentId)).catch(() => {});
     };
 
     ping = async (agentId: number, region: string, dto: PresenceOnlineDTO): Promise<void> => {
-        // Hot path — check meta key first to avoid a DB hit
+        // Meta key TTL expiry = agent went stale; they must call /online again
         const meta = await this.cache.get(META_KEY(region, agentId)).catch(() => null);
-        if (meta) {
-            const parsed = JSON.parse(meta) as { isOnline: boolean };
-            if (!parsed.isOnline) throw NotOnlineError();
-        } else {
-            // Meta key expired — fall back to DB
-            const presence = await findPresenceByAgentId(agentId, region);
-            if (!presence?.isOnline) throw NotOnlineError();
-        }
+        if (!meta) throw NotOnlineError();
 
-        // Update geo position + refresh meta TTL (no DB write on hot path)
         this.cache.geoAdd(GEO_SET_KEY(region), dto.lng, dto.lat, String(agentId)).catch(() => {});
         await this.cache.set(
             META_KEY(region, agentId),
-            JSON.stringify({ isOnline: true, lastSeenAt: new Date().toISOString() }),
+            JSON.stringify({ lat: dto.lat, lng: dto.lng, lastSeenAt: new Date().toISOString() }),
             env.delivery.presenceStaleSec,
         );
     };

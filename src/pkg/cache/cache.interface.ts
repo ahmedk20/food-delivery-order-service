@@ -11,4 +11,5 @@ export interface ICacheProvider {
     // Redis Sorted Set (geo) operations — used for presence:geo tracking
     geoAdd(key: string, lng: number, lat: number, member: string): Promise<void>;
     geoRem(key: string, member: string): Promise<void>;
+    geosearchByRadius(key: string, lng: number, lat: number, radiusMeters: number, count: number): Promise<string[]>;
 }
