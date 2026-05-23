@@ -9,17 +9,37 @@ import { socketAuthMiddleware } from './ws-auth.js';
 import { WS_EVENTS, type WsEvent, agentRoom, orderRoom, restaurantBranchRoom, customerRoom } from './events.js';
 import { SystemRole } from '../auth/enums.js';
 
-// ── Public interface ──────────────────────────────────────────────────────────
-// Services inject this — not the concrete SocketServer — so they can be tested
-// with a no-op stub and don't depend on socket.io at all.
+// ── Public interfaces ─────────────────────────────────────────────────────────
+
+// Services inject ISocketServer — not the concrete class — so they can be
+// unit-tested with a no-op stub without pulling in socket.io.
 export interface ISocketServer {
     emitToRoom(room: string, event: WsEvent, payload: Record<string, unknown>): void;
+}
+
+// Injected into SocketServer from the app layer so the order-ownership check
+// can reach the DB without the lib layer importing from app/.
+export interface IOrderAccessChecker {
+    canAccess(
+        publicId: string,
+        userId: number,
+        role: string,
+        restaurantId: number | undefined,
+        region: string,
+    ): Promise<boolean>;
 }
 
 // ── Concrete implementation ───────────────────────────────────────────────────
 @injectable()
 export class SocketServer implements ISocketServer {
     private io: SocketIOServer | null = null;
+    private orderAccessChecker: IOrderAccessChecker | null = null;
+
+    // Called from container.ts after both the socket server and the order module
+    // are registered, so the app layer owns the concrete implementation.
+    setOrderAccessChecker(checker: IOrderAccessChecker): void {
+        this.orderAccessChecker = checker;
+    }
 
     async init(httpServer: HttpServer): Promise<void> {
         if (this.io) {
@@ -52,36 +72,65 @@ export class SocketServer implements ISocketServer {
             logger.info('WebSocket connected', { userId: user.userId, role: user.role });
 
             // ── Auto-join personal rooms ──────────────────────────────────────
-            // Every user gets their customer channel immediately on connect.
+            const allowedChannels: string[] = [customerRoom(user.userId)];
+
             socket.join(customerRoom(user.userId));
 
-            // Agents join their own agent channel so assignment events arrive
-            // without the client needing to explicitly subscribe.
             if (user.role === SystemRole.DELIVERY_AGENT) {
                 socket.join(agentRoom(user.userId));
+                allowedChannels.push(agentRoom(user.userId));
             }
 
-            // Restaurant members join their branch channels.
             if (user.role === SystemRole.RESTAURANT_USER && user.branchIds) {
                 for (const branchId of user.branchIds as number[]) {
                     socket.join(restaurantBranchRoom(branchId));
+                    allowedChannels.push(restaurantBranchRoom(branchId));
                 }
             }
 
-            // Emit the list of pre-joined rooms so the client knows what it
-            // subscribed to without an extra round-trip.
-            socket.emit('hello', { allowedChannels: [...socket.rooms] });
+            // Stash for use in the subscribe handler below.
+            socket.data.allowedChannels = allowedChannels;
+
+            socket.emit('hello', { allowedChannels });
 
             // ── Client → Server events ────────────────────────────────────────
             socket.on('subscribe', async (channel: string, ack?: (res: { ok: boolean; error?: string }) => void) => {
-                // order:<publicId> rooms require an ownership check (Phase 3+).
-                // For now we allow any authenticated user to subscribe — the
-                // service layer validates ownership before emitting sensitive data.
                 if (typeof channel !== 'string' || !channel.trim()) {
                     ack?.({ ok: false, error: 'invalid_channel' });
                     return;
                 }
-                socket.join(channel.trim());
+                const trimmed = channel.trim();
+
+                // order:<publicId> — on-demand ownership check via injected checker.
+                if (trimmed.startsWith('order:')) {
+                    const publicId = trimmed.slice('order:'.length);
+                    if (!publicId) {
+                        ack?.({ ok: false, error: 'invalid_channel' });
+                        return;
+                    }
+                    if (this.orderAccessChecker) {
+                        // Region is derived from the user's countryCode (same value at order
+                        // insert time — CLAUDE.md §5 "they hold the same value at insert time").
+                        const region = user.countryCode.toLowerCase();
+                        const allowed = await this.orderAccessChecker.canAccess(
+                            publicId, user.userId, user.role, user.restaurantId, region,
+                        );
+                        if (!allowed) {
+                            ack?.({ ok: false, error: 'not_authorized' });
+                            return;
+                        }
+                    }
+                    socket.join(trimmed);
+                    ack?.({ ok: true });
+                    return;
+                }
+
+                // All other channels must be in the pre-computed allowed list.
+                if (!(socket.data.allowedChannels as string[]).includes(trimmed)) {
+                    ack?.({ ok: false, error: 'not_authorized' });
+                    return;
+                }
+                socket.join(trimmed);
                 ack?.({ ok: true });
             });
 

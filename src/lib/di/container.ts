@@ -8,6 +8,7 @@ import { KashierPaymentProvider } from '../../pkg/payment/kashier.js';
 import { PermissionCacheService } from '../../app/rbac/service/permission-cache.service.js';
 import { OrderService } from '../../app/order/service/order.service.js';
 import { OrderController } from '../../app/order/controller/order.controller.js';
+import { OrderAccessChecker } from '../../app/order/service/order-access-checker.js';
 import { PaymentService } from '../../app/payment/service/payment.service.js';
 import { PaymentController } from '../../app/payment/controller/payment.controller.js';
 import { socketServer } from '../websocket/ws-server.js';
@@ -20,6 +21,7 @@ container.registerSingleton(TOKENS.PermissionCacheService, PermissionCacheServic
 // SocketServer is a singleton created outside tsyringe (needs async init in server.ts).
 // We register the already-created instance so services can inject ISocketServer.
 container.registerInstance(TOKENS.SocketServer, socketServer);
+socketServer.setOrderAccessChecker(new OrderAccessChecker());
 
 // ── Payment provider ──────────────────────────────────────────────────────────
 container.registerInstance(
