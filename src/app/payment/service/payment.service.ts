@@ -1,4 +1,5 @@
 import { inject, injectable } from 'tsyringe';
+import type { Knex } from 'knex';
 import { TOKENS } from '../../../lib/di/tokens.js';
 import { env } from '../../../lib/config/env.js';
 import AppError from '../../../lib/error/AppError.js';
@@ -22,7 +23,11 @@ import {
     markWebhookError,
     markWebhookProcessed,
 } from '../repository/webhook-event.repo.js';
-import { creditRestaurantBalance, debitRestaurantBalance } from '../repository/restaurant-balance.repo.js';
+import {
+    creditRestaurantBalance,
+    debitRestaurantBalance,
+    settleRestaurantBalance,
+} from '../repository/restaurant-balance.repo.js';
 import {
     InvalidWebhookSignatureError,
     PaymentAlreadyCompletedError,
@@ -30,6 +35,7 @@ import {
 } from '../errors.js';
 import { OrderNotFoundError, OrderNotPayableError } from '../../order/errors.js';
 import { Transaction } from '../entity/transaction.entity.js';
+import type { OrderEntity } from '../../order/entity/order.entity.js';
 import type { InitPaymentDTO } from '../dto/init-payment.dto.js';
 import type { RefundRequestDTO } from '../dto/refund-request.dto.js';
 import type { TransactionResponseDTO } from '../dto/transaction-response.dto.js';
@@ -378,5 +384,72 @@ export class PaymentService {
             await trx.rollback();
             throw err;
         }
+    };
+
+    // Called by OrderService.placeOrder for COD orders — creates the pending collection record.
+    createCodPendingTransaction = async (
+        orderId: number,
+        customerId: number,
+        amount: number,
+        currency: string,
+        region: string,
+        conn: Knex,
+    ): Promise<void> => {
+        const codProvider = await findPaymentProviderByName('cod');
+        await createTransaction({
+            region,
+            orderId,
+            type:                'cod_collection',
+            method:              'cod',
+            providerId:          codProvider?.id ?? null,
+            providerReferenceId: null,
+            status:              'pending',
+            amount,
+            currency,
+            srcAccId:            customerId,
+            dstAccId:            null,
+            isRefunded:          false,
+            refundedPaymentId:   null,
+            idempotencyKey:      null,
+            metadata:            {},
+        }, region, conn);
+    };
+
+    // Called by DeliveryService on delivery completion. Settles payment and restaurant balance
+    // inside the caller's DB transaction. Returns the amount credited to the restaurant.
+    settleDelivery = async (
+        order: OrderEntity,
+        region: string,
+        conn: Knex,
+    ): Promise<{ restaurantCreditAmount: number }> => {
+        if (order.paymentMethod === 'cod') {
+            const codTx = await conn('transactions')
+                .where({ order_id: order.id, type: 'cod_collection', status: 'pending' })
+                .first();
+            if (codTx) {
+                await conn('transactions')
+                    .where({ id: codTx.id })
+                    .update({ status: 'succeeded', updated_at: new Date() });
+            }
+        } else {
+            // Online orders: assert a succeeded charge exists (invariant check)
+            const chargeTx = await conn('transactions')
+                .where({ order_id: order.id, type: 'charge', status: 'succeeded' })
+                .first();
+            if (!chargeTx) {
+                throw new AppError('PaymentNotSettled', 409);
+            }
+        }
+
+        const commission = 0; // v1: no platform commission (commissionRate = 0)
+
+        // Move subtotal from pending_balance to available_balance
+        await settleRestaurantBalance(
+            order.restaurantId, region,
+            order.subtotal, commission,
+            order.currency, conn,
+        );
+
+        return { restaurantCreditAmount: order.subtotal - commission };
     };
 }

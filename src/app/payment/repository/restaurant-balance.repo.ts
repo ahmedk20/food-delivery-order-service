@@ -75,6 +75,26 @@ export async function debitRestaurantBalance(
     `, { restaurantId, currency, amount });
 }
 
+// Move amount from pending_balance to available_balance (minus commission) on delivery settlement.
+// Uses a locked UPDATE — caller must hold a transaction.
+export async function settleRestaurantBalance(
+    restaurantId: number,
+    region: string,
+    amount: number,
+    commission: number,
+    currency: string,
+    conn: Knex,
+): Promise<void> {
+    await conn.raw(`
+        UPDATE restaurant_balances
+        SET
+            pending_balance   = pending_balance - :amount,
+            available_balance = available_balance + (:amount - :commission),
+            updated_at        = NOW()
+        WHERE restaurant_id = :restaurantId AND currency = :currency
+    `, { restaurantId, amount, commission, currency });
+}
+
 export async function findRestaurantBalance(
     restaurantId: number,
     region: string,

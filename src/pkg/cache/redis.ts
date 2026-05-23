@@ -39,4 +39,17 @@ export class RedisCacheProvider implements ICacheProvider {
     async delete(key: string): Promise<void> {
         await this.client.del(key);
     }
+
+    async sAdd(key: string, member: string): Promise<void> {
+        await this.client.sadd(key, member);
+    }
+
+    async sRem(key: string, member: string): Promise<void> {
+        await this.client.srem(key, member);
+    }
+
+    async sIsMember(key: string, member: string): Promise<boolean> {
+        const result = await this.client.sismember(key, member);
+        return result === 1;
+    }
 }

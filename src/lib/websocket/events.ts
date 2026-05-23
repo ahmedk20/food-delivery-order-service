@@ -6,6 +6,9 @@ export const WS_EVENTS = {
     AGENT_LOCATION_UPDATED:  'agent.location_updated',
     PAYMENT_COMPLETED:       'payment.completed',
     PAYMENT_FAILED:          'payment.failed',
+    TASK_ASSIGNED:           'task.assigned',
+    TASK_CANCELLED:          'task.cancelled',
+    DELIVERY_STATUS_CHANGED: 'delivery.status_changed',
 } as const;
 
 export type WsEvent = typeof WS_EVENTS[keyof typeof WS_EVENTS];

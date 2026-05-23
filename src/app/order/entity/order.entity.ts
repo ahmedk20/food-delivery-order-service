@@ -36,6 +36,7 @@ export class OrderEntity {
     commission: number;
     total: number;
     notes: string | null;
+    reassignmentCount: number;
     estimatedDeliveryAt: Date | null;
     acceptedAt: Date | null;
     rejectedAt: Date | null;
@@ -71,6 +72,7 @@ export class OrderEntity {
         this.commission              = data.commission ?? 0;
         this.total                   = data.total!;
         this.notes                   = data.notes ?? null;
+        this.reassignmentCount       = data.reassignmentCount ?? 0;
         this.estimatedDeliveryAt     = data.estimatedDeliveryAt ?? null;
         this.acceptedAt              = data.acceptedAt ?? null;
         this.rejectedAt              = data.rejectedAt ?? null;

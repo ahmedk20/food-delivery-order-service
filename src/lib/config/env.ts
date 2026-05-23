@@ -53,6 +53,13 @@ const staticSchema = z.object({
 
     RABBITMQ_URL:         z.string().default('amqp://guest:guest@localhost:5672'),
     INTERNAL_HMAC_SECRET: z.string().min(1),
+
+    // Delivery auto-assignment tuning
+    ASSIGNMENT_RADIUS_METERS:  z.coerce.number().positive().default(5000),
+    AGENT_ACCEPT_TIMEOUT_SEC:  z.coerce.number().positive().default(30),
+    MAX_REASSIGNMENT_ATTEMPTS: z.coerce.number().positive().default(3),
+    AGENT_SHARE_RATE:          z.coerce.number().min(0).max(1).default(1.0),
+    PRESENCE_STALE_SEC:        z.coerce.number().positive().default(90),
 });
 
 const staticResult = staticSchema.safeParse(process.env);
@@ -172,4 +179,12 @@ export const env = {
     },
 
     internalHmacSecret: staticData.INTERNAL_HMAC_SECRET,
+
+    delivery: {
+        assignmentRadiusMeters:  staticData.ASSIGNMENT_RADIUS_METERS,
+        agentAcceptTimeoutSec:   staticData.AGENT_ACCEPT_TIMEOUT_SEC,
+        maxReassignmentAttempts: staticData.MAX_REASSIGNMENT_ATTEMPTS,
+        agentShareRate:          staticData.AGENT_SHARE_RATE,
+        presenceStaleSec:        staticData.PRESENCE_STALE_SEC,
+    },
 };

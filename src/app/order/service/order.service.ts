@@ -4,6 +4,7 @@ import { db } from '../../../lib/knex/knex.js';
 import AppError from '../../../lib/error/AppError.js';
 import { SystemRole } from '../../../lib/auth/enums.js';
 import { parsePaginationQuery, parseFilters } from '../../../lib/http/pagination/parse-query.js';
+import type { PaymentService } from '../../payment/service/payment.service.js';
 import type { ICoreServiceClient } from '../../../lib/http/core-service-client.interface.js';
 import type { ICacheProvider } from '../../../pkg/cache/cache.interface.js';
 import type { ISocketServer } from '../../../lib/websocket/ws-server.js';
@@ -117,6 +118,7 @@ export class OrderService {
         @inject(TOKENS.CoreServiceClient) private readonly coreClient: ICoreServiceClient,
         @inject(TOKENS.CacheProvider)     private readonly cache: ICacheProvider,
         @inject(TOKENS.SocketServer)      private readonly socket: ISocketServer,
+        @inject(TOKENS.PaymentService)    private readonly paymentService: PaymentService,
     ) {}
 
     placeOrder = async (
@@ -221,6 +223,7 @@ export class OrderService {
                     deliveredAt:             null,
                     cancelledAt:             null,
                     cancellationReason:      null,
+                    reassignmentCount:       0,
                 },
                 region,
                 trx,
@@ -241,6 +244,13 @@ export class OrderService {
                 region,
                 trx,
             );
+
+            // For COD: record the pending cash collection inside the same transaction
+            if (dto.paymentMethod === 'cod') {
+                await this.paymentService.createCodPendingTransaction(
+                    order.id, customerId, total, currency, region, trx,
+                );
+            }
 
             await trx.commit();
 
@@ -401,5 +411,31 @@ export class OrderService {
 
         const items = await findItemsByOrderId(updated.id, region);
         return toOrderResponseDTO(updated, items);
+    };
+
+    // ── Internal methods (called by DeliveryService via DI) ───────────────────
+
+    getOrderEntity = async (
+        publicId: string,
+        region: string,
+    ): Promise<OrderEntity | undefined> => {
+        return findOrderByPublicId(publicId, region);
+    };
+
+    getOrderEntityById = async (
+        id: number,
+        region: string,
+    ): Promise<OrderEntity | undefined> => {
+        return findOrderById(id, region);
+    };
+
+    internalUpdateStatus = async (
+        orderId: number,
+        region: string,
+        status: import('../enums.js').OrderStatus,
+        extra: Parameters<typeof repoUpdateOrderStatus>[3] = {},
+        conn?: import('knex').Knex,
+    ): Promise<void> => {
+        await repoUpdateOrderStatus(orderId, region, status, extra, conn);
     };
 }

@@ -11,6 +11,8 @@ import { OrderController } from '../../app/order/controller/order.controller.js'
 import { OrderAccessChecker } from '../../app/order/service/order-access-checker.js';
 import { PaymentService } from '../../app/payment/service/payment.service.js';
 import { PaymentController } from '../../app/payment/controller/payment.controller.js';
+import { DeliveryService } from '../../app/delivery/service/delivery.service.js';
+import { DeliveryController } from '../../app/delivery/controller/delivery.controller.js';
 import { socketServer } from '../websocket/ws-server.js';
 
 // ── Infrastructure ────────────────────────────────────────────────────────────
@@ -34,5 +36,7 @@ container.registerSingleton(TOKENS.OrderService, OrderService);
 container.registerSingleton(TOKENS.OrderController, OrderController);
 container.registerSingleton(TOKENS.PaymentService, PaymentService);
 container.registerSingleton(TOKENS.PaymentController, PaymentController);
+container.registerSingleton(TOKENS.DeliveryService, DeliveryService);
+container.registerSingleton(TOKENS.DeliveryController, DeliveryController);
 
 export { container };

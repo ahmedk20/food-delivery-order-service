@@ -17,7 +17,7 @@ const COLUMNS = [
     'delivery_address_snapshot', 'delivery_agent_id',
     'status', 'payment_method',
     'subtotal', 'delivery_fee', 'service_fee', 'discount', 'commission', 'total',
-    'notes', 'estimated_delivery_at',
+    'notes', 'reassignment_count', 'estimated_delivery_at',
     'accepted_at', 'rejected_at', 'ready_at', 'assigned_at',
     'picked_at', 'delivered_at', 'cancelled_at', 'cancellation_reason',
     'created_at', 'updated_at',
@@ -47,6 +47,7 @@ function toEntity(row: any): OrderEntity {
         commission:              row.commission,
         total:                   row.total,
         notes:                   row.notes,
+        reassignmentCount:       row.reassignment_count,
         estimatedDeliveryAt:     row.estimated_delivery_at,
         acceptedAt:              row.accepted_at,
         rejectedAt:              row.rejected_at,
@@ -206,4 +207,16 @@ export async function updateOrderStatus(
         .update(updates)
         .returning(COLUMNS);
     return toEntity(row);
+}
+
+export async function incrementReassignmentCount(
+    id: number,
+    region: string,
+    conn?: Knex,
+): Promise<void> {
+    const knex = conn ?? db(region);
+    await knex.raw(
+        `UPDATE orders SET reassignment_count = reassignment_count + 1, updated_at = NOW() WHERE id = ?`,
+        [id],
+    );
 }
