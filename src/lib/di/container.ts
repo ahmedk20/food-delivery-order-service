@@ -13,6 +13,10 @@ import { PaymentService } from '../../app/payment/service/payment.service.js';
 import { PaymentController } from '../../app/payment/controller/payment.controller.js';
 import { DeliveryService } from '../../app/delivery/service/delivery.service.js';
 import { DeliveryController } from '../../app/delivery/controller/delivery.controller.js';
+import { AgentService } from '../../app/delivery-agent/service/agent.service.js';
+import { AgentController } from '../../app/delivery-agent/controller/agent.controller.js';
+import { RestaurantOrderService } from '../../app/restaurant-orders/service/restaurant-order.service.js';
+import { RestaurantOrderController } from '../../app/restaurant-orders/controller/restaurant-order.controller.js';
 import { socketServer } from '../websocket/ws-server.js';
 
 // ── Infrastructure ────────────────────────────────────────────────────────────
@@ -38,5 +42,9 @@ container.registerSingleton(TOKENS.PaymentService, PaymentService);
 container.registerSingleton(TOKENS.PaymentController, PaymentController);
 container.registerSingleton(TOKENS.DeliveryService, DeliveryService);
 container.registerSingleton(TOKENS.DeliveryController, DeliveryController);
+container.registerSingleton(TOKENS.AgentService, AgentService);
+container.registerSingleton(TOKENS.AgentController, AgentController);
+container.registerSingleton(TOKENS.RestaurantOrderService, RestaurantOrderService);
+container.registerSingleton(TOKENS.RestaurantOrderController, RestaurantOrderController);
 
 export { container };

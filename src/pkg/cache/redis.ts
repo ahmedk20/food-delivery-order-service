@@ -52,4 +52,13 @@ export class RedisCacheProvider implements ICacheProvider {
         const result = await this.client.sismember(key, member);
         return result === 1;
     }
+
+    async geoAdd(key: string, lng: number, lat: number, member: string): Promise<void> {
+        await this.client.geoadd(key, lng, lat, member);
+    }
+
+    async geoRem(key: string, member: string): Promise<void> {
+        // geo sets are backed by sorted sets; ZREM removes the member
+        await this.client.zrem(key, member);
+    }
 }

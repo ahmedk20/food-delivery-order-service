@@ -7,4 +7,8 @@ export interface ICacheProvider {
     sAdd(key: string, member: string): Promise<void>;
     sRem(key: string, member: string): Promise<void>;
     sIsMember(key: string, member: string): Promise<boolean>;
+
+    // Redis Sorted Set (geo) operations — used for presence:geo tracking
+    geoAdd(key: string, lng: number, lat: number, member: string): Promise<void>;
+    geoRem(key: string, member: string): Promise<void>;
 }

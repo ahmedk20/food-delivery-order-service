@@ -25,6 +25,7 @@ import {
     findOrderById,
     findOrderByPublicId,
     findOrdersByCustomerId,
+    findOrdersByBranchId,
     updateOrderStatus as repoUpdateOrderStatus,
     type OrderFilterField,
     type OrderSortField,
@@ -300,6 +301,26 @@ export class OrderService {
         const filters = parseFilters<Record<string, any>, OrderFilterField>(query, ['status']);
 
         const result = await findOrdersByCustomerId(customerId, region, pagination, filters);
+        return {
+            data: result.data.map(o => toOrderListItemDTO(o, 0)),
+            meta: result.meta,
+        };
+    };
+
+    listOrdersByBranch = async (
+        branchId: number,
+        region: string,
+        query: Record<string, any>,
+    ): Promise<{
+        data: OrderListItemDTO[];
+        meta: { hasMore: boolean; nextCursor: number | null; count: number };
+    }> => {
+        const pagination = parsePaginationQuery<Record<string, any>, OrderSortField>(
+            query, ['id'], 'id',
+        );
+        const filters = parseFilters<Record<string, any>, OrderFilterField>(query, ['status']);
+
+        const result = await findOrdersByBranchId(branchId, region, pagination, filters);
         return {
             data: result.data.map(o => toOrderListItemDTO(o, 0)),
             meta: result.meta,
