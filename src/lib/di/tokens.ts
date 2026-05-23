@@ -14,8 +14,10 @@ export const TOKENS = {
     MessageBroker: Symbol('MessageBroker'),
 
     // Orders (Phase 3)
-    OrderService:    Symbol('OrderService'),
-    OrderController: Symbol('OrderController'),
+    OrderService:          Symbol('OrderService'),
+    OrderController:       Symbol('OrderController'),
+    OrderStatusService:    Symbol('OrderStatusService'),
+    CoreDataCacheService:  Symbol('CoreDataCacheService'),
 
     // Payments (Phase 4)
     PaymentService:    Symbol('PaymentService'),
@@ -37,4 +39,7 @@ export const TOKENS = {
     // Admin (Phase 9)
     AdminService:    Symbol('AdminService'),
     AdminController: Symbol('AdminController'),
+
+    // Finance
+    FinanceService: Symbol('FinanceService'),
 };

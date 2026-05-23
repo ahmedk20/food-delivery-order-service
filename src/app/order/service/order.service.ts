@@ -6,11 +6,13 @@ import AppError from '../../../lib/error/AppError.js';
 import { SystemRole } from '../../../lib/auth/enums.js';
 import { parsePaginationQuery, parseFilters } from '../../../lib/http/pagination/parse-query.js';
 import type { PaymentService } from '../../payment/service/payment.service.js';
-import type { ICoreServiceClient } from '../../../lib/http/core-service-client.interface.js';
 import type { ICacheProvider } from '../../../pkg/cache/cache.interface.js';
 import type { ISocketServer } from '../../../lib/websocket/ws-server.js';
 import { currencyForCountry } from '../../../pkg/utils/currency.js';
 import { sumMinor, multiplyMinor } from '../../../pkg/utils/money.js';
+import type { ICoreServiceClient } from '../../../lib/http/core-service-client.interface.js';
+import type { CoreDataCacheService } from './core-data-cache.service.js';
+import type { OrderStatusService } from './order-status.service.js';
 import type { PlaceOrderDTO } from '../dto/place-order.dto.js';
 import type { UpdateOrderStatusDTO } from '../dto/update-order-status.dto.js';
 import type {
@@ -130,10 +132,12 @@ function toOrderListItemDTO(order: OrderEntity, itemsCount: number): OrderListIt
 @injectable()
 export class OrderService {
     constructor(
-        @inject(TOKENS.CoreServiceClient) private readonly coreClient: ICoreServiceClient,
-        @inject(TOKENS.CacheProvider)     private readonly cache: ICacheProvider,
-        @inject(TOKENS.SocketServer)      private readonly socket: ISocketServer,
-        @inject(TOKENS.PaymentService)    private readonly paymentService: PaymentService,
+        @inject(TOKENS.CacheProvider)        private readonly cache: ICacheProvider,
+        @inject(TOKENS.SocketServer)         private readonly socket: ISocketServer,
+        @inject(TOKENS.PaymentService)       private readonly paymentService: PaymentService,
+        @inject(TOKENS.CoreServiceClient)    private readonly coreClient: ICoreServiceClient,
+        @inject(TOKENS.CoreDataCacheService) private readonly coreData: CoreDataCacheService,
+        @inject(TOKENS.OrderStatusService)   private readonly statusService: OrderStatusService,
     ) {}
 
     placeOrder = async (
@@ -144,9 +148,9 @@ export class OrderService {
     ): Promise<OrderResponseDTO> => {
         // 1. Validate customer, branch metadata, and address in parallel
         const [, branchMeta, address] = await Promise.all([
-            this.coreClient.getUserById(customerId, correlationId),
-            this.coreClient.getBranchMetadata(dto.branchId, correlationId),
-            this.coreClient.getAddressById(dto.deliveryAddressId, correlationId),
+            this.coreData.getUser(customerId, correlationId),
+            this.coreData.getBranch(dto.branchId, correlationId),
+            this.coreData.getAddress(dto.deliveryAddressId, correlationId),
         ]);
 
         if (address.userId !== customerId) {
@@ -156,7 +160,7 @@ export class OrderService {
         // 2. Validate all products in parallel
         const products = await Promise.all(
             dto.items.map(item =>
-                this.coreClient.getProductWithBranchDetails(item.productId, dto.branchId, correlationId),
+                this.coreData.getProduct(item.productId, dto.branchId, correlationId),
             ),
         );
 
@@ -407,96 +411,9 @@ export class OrderService {
         actorRole: string,
         dto: UpdateOrderStatusDTO,
     ): Promise<OrderResponseDTO> => {
-        const order = await findOrderByPublicId(publicId, region);
-        if (!order) throw OrderNotFoundError();
-
-        const from = order.status;
-        const to   = dto.status;
-
-        if (TERMINAL_STATUSES.has(from)) throw OrderAlreadyFinalizedError();
-
-        if (actorRole !== SystemRole.SYSTEM_ADMIN) {
-            if (actorRole === SystemRole.CUSTOMER) {
-                if (order.customerId !== actorId) throw OrderAccessDeniedError();
-
-                const allowed: Partial<Record<string, string[]>> = {
-                    pending_payment: ['cancelled'],
-                    placed:          ['cancelled'],
-                };
-                if (!allowed[from]?.includes(to)) throw InvalidStatusTransitionError(from, to);
-
-                // Customer can only cancel placed orders before the restaurant accepts
-                if (from === 'placed' && order.acceptedAt) throw CancellationWindowExpiredError();
-
-            } else if (actorRole === SystemRole.RESTAURANT_USER) {
-                const allowed: Partial<Record<string, string[]>> = {
-                    placed:    ['accepted', 'rejected', 'cancelled'],
-                    accepted:  ['preparing', 'cancelled'],
-                    preparing: ['ready', 'cancelled'],
-                };
-                if (!allowed[from]?.includes(to)) throw InvalidStatusTransitionError(from, to);
-            } else {
-                throw InvalidStatusTransitionError(from, to);
-            }
-        }
-
-        if ((to === 'rejected' || to === 'cancelled') && !dto.reason) {
-            throw new AppError('ReasonRequired', 422);
-        }
-
-        // Build timestamp extras
-        const extra: Parameters<typeof repoUpdateOrderStatus>[3] = {};
-        if (to === 'accepted')  {
-            extra.acceptedAt = new Date();
-            if (dto.estimatedDeliveryAt) extra.estimatedDeliveryAt = new Date(dto.estimatedDeliveryAt);
-        }
-        if (to === 'rejected')  { extra.rejectedAt = new Date(); extra.cancellationReason = dto.reason; }
-        if (to === 'ready')     { extra.readyAt = new Date(); }
-        if (to === 'cancelled') {
-            extra.cancelledAt       = new Date();
-            extra.cancellationReason = dto.reason ?? null;
-        }
-
-        const trx = await db(region).transaction();
-        let updated!: OrderEntity;
-        try {
-            updated = await repoUpdateOrderStatus(order.id, region, to, extra, trx);
-
-            await writeOutboxEvent(trx, region, 'order.status_changed', String(order.id), {
-                orderId:   order.id,
-                status:    to,
-                updatedAt: new Date().toISOString(),
-            });
-
-            if (to === 'cancelled') {
-                await writeOutboxEvent(trx, region, 'order.cancelled', String(order.id), {
-                    orderId:    order.id,
-                    customerId: order.customerId,
-                    reason:     dto.reason ?? null,
-                });
-            }
-
-            await trx.commit();
-        } catch (err) {
-            await trx.rollback();
-            throw err;
-        }
-
+        const result = await this.statusService.updateStatus(publicId, region, actorId, actorRole, dto);
         this.cache.delete(orderCacheKey(region, publicId)).catch(() => {});
-
-        const statusPayload = { orderId: publicId, status: to, updatedAt: new Date().toISOString() };
-        this.socket.emitToRoom(orderRoom(publicId), WS_EVENTS.ORDER_STATUS_CHANGED, statusPayload);
-        this.socket.emitToRoom(restaurantBranchRoom(order.branchId), WS_EVENTS.ORDER_STATUS_CHANGED, statusPayload);
-        this.socket.emitToRoom(customerRoom(order.customerId), WS_EVENTS.ORDER_STATUS_CHANGED, statusPayload);
-
-        if (to === 'cancelled') {
-            const cancelPayload = { orderId: publicId, reason: dto.reason ?? null, updatedAt: new Date().toISOString() };
-            this.socket.emitToRoom(orderRoom(publicId), WS_EVENTS.ORDER_CANCELLED, cancelPayload);
-            this.socket.emitToRoom(customerRoom(order.customerId), WS_EVENTS.ORDER_CANCELLED, cancelPayload);
-        }
-
-        const items = await findItemsByOrderId(updated.id, region);
-        return toOrderResponseDTO(updated, items);
+        return result;
     };
 
     // ── Internal methods (called by DeliveryService via DI) ───────────────────
@@ -522,6 +439,6 @@ export class OrderService {
         extra: Parameters<typeof repoUpdateOrderStatus>[3] = {},
         conn?: import('knex').Knex,
     ): Promise<void> => {
-        await repoUpdateOrderStatus(orderId, region, status, extra, conn);
+        await this.statusService.internalUpdateStatus(orderId, region, status, extra, conn);
     };
 }

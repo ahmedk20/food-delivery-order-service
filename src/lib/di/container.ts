@@ -4,11 +4,13 @@ import { TOKENS } from './tokens.js';
 import { env } from '../config/env.js';
 import { cacheProvider } from '../cache/init.js';
 import { CoreServiceClient } from '../http/core-service-client.js';
-import { KashierPaymentProvider } from '../../pkg/payment/kashier.js';
+import { KashierPaymentProvider } from '../../pkg/payment/kashier/index.js';
 import { RabbitMQClient } from '../../pkg/messaging/rabbitmq/rabbitmq.client.js';
-import { PermissionCacheService } from '../../app/rbac/service/permission-cache.service.js';
+import { PermissionCacheService } from '../rbac/permission-cache.service.js';
 import { OrderService } from '../../app/order/service/order.service.js';
 import { OrderController } from '../../app/order/controller/order.controller.js';
+import { OrderStatusService } from '../../app/order/service/order-status.service.js';
+import { CoreDataCacheService } from '../../app/order/service/core-data-cache.service.js';
 import { OrderAccessChecker } from '../../app/order/service/order-access-checker.js';
 import { PaymentService } from '../../app/payment/service/payment.service.js';
 import { PaymentController } from '../../app/payment/controller/payment.controller.js';
@@ -20,6 +22,7 @@ import { RestaurantOrderService } from '../../app/restaurant-orders/service/rest
 import { RestaurantOrderController } from '../../app/restaurant-orders/controller/restaurant-order.controller.js';
 import { AdminService } from '../../app/admin/service/admin.service.js';
 import { AdminController } from '../../app/admin/controller/admin.controller.js';
+import { FinanceService } from '../../app/finance/service/finance.service.js';
 import { socketServer } from '../websocket/ws-server.js';
 
 // ── Infrastructure ────────────────────────────────────────────────────────────
@@ -45,6 +48,8 @@ container.registerInstance(
 );
 
 // ── App modules ───────────────────────────────────────────────────────────────
+container.registerSingleton(TOKENS.CoreDataCacheService, CoreDataCacheService);
+container.registerSingleton(TOKENS.OrderStatusService, OrderStatusService);
 container.registerSingleton(TOKENS.OrderService, OrderService);
 container.registerSingleton(TOKENS.OrderController, OrderController);
 container.registerSingleton(TOKENS.PaymentService, PaymentService);
@@ -57,5 +62,6 @@ container.registerSingleton(TOKENS.RestaurantOrderService, RestaurantOrderServic
 container.registerSingleton(TOKENS.RestaurantOrderController, RestaurantOrderController);
 container.registerSingleton(TOKENS.AdminService, AdminService);
 container.registerSingleton(TOKENS.AdminController, AdminController);
+container.registerSingleton(TOKENS.FinanceService, FinanceService);
 
 export { container };

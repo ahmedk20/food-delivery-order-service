@@ -295,8 +295,7 @@ export class DeliveryService {
         agentId: number,
         now: Date,
     ): Promise<void> {
-        const agentShareRate  = env.delivery.agentShareRate;
-        const agentEarning    = Math.floor(order.deliveryFee * agentShareRate);
+        const agentEarning = Math.floor(order.deliveryFee * env.delivery.agentEarningShareBps / 10_000);
 
         const trx = await db(region).transaction();
         try {

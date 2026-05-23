@@ -1,16 +1,6 @@
 import type { Knex } from 'knex';
 import { db } from '../../../lib/knex/knex.js';
-
-export interface RestaurantBalance {
-    restaurantId: number;
-    region: string;
-    currency: string;
-    availableBalance: number;
-    pendingBalance: number;
-    totalEarned: number;
-    createdAt: Date;
-    updatedAt: Date;
-}
+import { RestaurantBalanceEntity } from '../entity/restaurant-balance.entity.js';
 
 const COLUMNS = [
     'restaurant_id', 'region', 'currency',
@@ -18,8 +8,8 @@ const COLUMNS = [
     'created_at', 'updated_at',
 ];
 
-function toEntity(row: any): RestaurantBalance {
-    return {
+function toEntity(row: any): RestaurantBalanceEntity {
+    return new RestaurantBalanceEntity({
         restaurantId:     row.restaurant_id,
         region:           row.region,
         currency:         row.currency,
@@ -28,7 +18,7 @@ function toEntity(row: any): RestaurantBalance {
         totalEarned:      row.total_earned,
         createdAt:        row.created_at,
         updatedAt:        row.updated_at,
-    };
+    });
 }
 
 // Credit restaurant's pending_balance and total_earned on payment confirmation.
@@ -56,7 +46,7 @@ export async function creditRestaurantBalance(
 
 // Reverse a previous credit on refund. Drains pending_balance first, then available_balance.
 // PostgreSQL evaluates the original column values for all SET expressions in a single UPDATE,
-// so GREATEST/GREATEST arithmetic here is safe against negative balances.
+// so GREATEST arithmetic here is safe against negative balances.
 export async function debitRestaurantBalance(
     restaurantId: number,
     region: string,
@@ -76,7 +66,6 @@ export async function debitRestaurantBalance(
 }
 
 // Move amount from pending_balance to available_balance (minus commission) on delivery settlement.
-// Uses a locked UPDATE — caller must hold a transaction.
 export async function settleRestaurantBalance(
     restaurantId: number,
     region: string,
@@ -95,32 +84,8 @@ export async function settleRestaurantBalance(
     `, { restaurantId, amount, commission, currency });
 }
 
-// List all restaurant balances, optionally filtered by restaurantId.
-// Paginated by restaurant_id (ascending).
-export async function findAllRestaurantBalances(
-    region: string,
-    opts: { restaurantId?: number; cursor?: number; limit: number },
-): Promise<{ data: RestaurantBalance[]; meta: { hasMore: boolean; nextCursor: number | null; count: number } }> {
-    let query = db(region)('restaurant_balances').select(COLUMNS).orderBy('restaurant_id', 'asc');
-
-    if (opts.restaurantId !== undefined) {
-        query = query.where({ restaurant_id: opts.restaurantId });
-    }
-    if (opts.cursor !== undefined) {
-        query = query.where('restaurant_id', '>=', opts.cursor);
-    }
-
-    query = query.limit(opts.limit + 1);
-
-    const rows = await query;
-    const hasMore    = rows.length > opts.limit;
-    const data       = rows.slice(0, opts.limit).map(toEntity);
-    const nextCursor = hasMore ? data[data.length - 1].restaurantId : null;
-    return { data, meta: { hasMore, nextCursor, count: data.length } };
-}
-
-// Deduct from available_balance in one atomic UPDATE.
-// Returns true if the update happened (balance was sufficient), false if not.
+// Deduct from available_balance atomically.
+// Returns true if the balance was sufficient and the update happened.
 export async function payoutFromAvailableBalance(
     restaurantId: number,
     region: string,
@@ -142,10 +107,32 @@ export async function payoutFromAvailableBalance(
 export async function findRestaurantBalance(
     restaurantId: number,
     region: string,
-): Promise<RestaurantBalance | undefined> {
+): Promise<RestaurantBalanceEntity | undefined> {
     const row = await db(region)('restaurant_balances')
         .select(COLUMNS)
         .where({ restaurant_id: restaurantId })
         .first();
     return row ? toEntity(row) : undefined;
+}
+
+export async function findAllRestaurantBalances(
+    region: string,
+    opts: { restaurantId?: number; cursor?: number; limit: number },
+): Promise<{ data: RestaurantBalanceEntity[]; meta: { hasMore: boolean; nextCursor: number | null; count: number } }> {
+    let query = db(region)('restaurant_balances').select(COLUMNS).orderBy('restaurant_id', 'asc');
+
+    if (opts.restaurantId !== undefined) {
+        query = query.where({ restaurant_id: opts.restaurantId });
+    }
+    if (opts.cursor !== undefined) {
+        query = query.where('restaurant_id', '>=', opts.cursor);
+    }
+
+    query = query.limit(opts.limit + 1);
+
+    const rows      = await query;
+    const hasMore   = rows.length > opts.limit;
+    const data      = rows.slice(0, opts.limit).map(toEntity);
+    const nextCursor = hasMore ? data[data.length - 1].restaurantId : null;
+    return { data, meta: { hasMore, nextCursor, count: data.length } };
 }

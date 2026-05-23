@@ -1,37 +1,29 @@
 import { db } from '../knex/knex.js';
 import logger from '../logger/logger.js';
+import { env } from '../config/env.js';
+import { claimPendingBatch, markDispatched, markFailed } from './outbox.repo.js';
 import type { IMessageBroker } from '../../pkg/messaging/message-broker.interface.js';
 
-const BATCH_SIZE      = 50;
-const POLL_INTERVAL_MS = 2_000;
-const MAX_ATTEMPTS    = 5;
-const EXCHANGE        = 'order-service.events';
+const MAX_ATTEMPTS = 5;
 
 export function startOutboxDispatcher(broker: IMessageBroker, region: string): void {
-    const knex = db(region);
+    const knex           = db(region);
+    const batchSize      = env.rabbitmq.orderEvents.batchSize;
+    const pollIntervalMs = env.rabbitmq.orderEvents.drainTickSec * 1_000;
+    const exchange       = env.rabbitmq.orderEvents.exchange;
 
     async function tick(): Promise<void> {
-        const rows = await knex.raw<{ rows: Array<{ id: number; event_type: string; aggregate_id: string; payload: string; attempts: number }> }>(`
-            SELECT id, event_type, aggregate_id, payload, attempts
-            FROM outbox
-            WHERE dispatched_at IS NULL AND attempts < :maxAttempts
-            ORDER BY created_at ASC
-            LIMIT :batchSize
-            FOR UPDATE SKIP LOCKED
-        `, { maxAttempts: MAX_ATTEMPTS, batchSize: BATCH_SIZE });
+        const rows = await claimPendingBatch(knex, MAX_ATTEMPTS, batchSize);
 
-        for (const row of rows.rows) {
+        for (const row of rows) {
             try {
-                const body = Buffer.from(typeof row.payload === 'string' ? row.payload : JSON.stringify(row.payload));
-                await broker.publish(EXCHANGE, row.event_type, body);
-                await knex('outbox').where('id', row.id).update({ dispatched_at: new Date() });
+                const body = Buffer.from(
+                    typeof row.payload === 'string' ? row.payload : JSON.stringify(row.payload),
+                );
+                await broker.publish(exchange, row.event_type, body);
+                await markDispatched(knex, row.id);
             } catch (err) {
-                await knex('outbox')
-                    .where('id', row.id)
-                    .update({
-                        attempts:   knex.raw('attempts + 1'),
-                        last_error: String(err),
-                    });
+                await markFailed(knex, row.id, String(err));
                 logger.warn('Outbox dispatch failed', { id: row.id, attempts: row.attempts + 1, region });
             }
         }
@@ -39,7 +31,7 @@ export function startOutboxDispatcher(broker: IMessageBroker, region: string): v
 
     setInterval(() => {
         tick().catch(err => logger.error('Outbox tick error', { err, region }));
-    }, POLL_INTERVAL_MS);
+    }, pollIntervalMs);
 
-    logger.info('Outbox dispatcher started', { region });
+    logger.info('Outbox dispatcher started', { region, exchange, batchSize, pollIntervalMs });
 }

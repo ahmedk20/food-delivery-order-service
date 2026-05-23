@@ -54,12 +54,28 @@ const staticSchema = z.object({
     RABBITMQ_URL:         z.string().default('amqp://guest:guest@localhost:5672'),
     INTERNAL_HMAC_SECRET: z.string().min(1),
 
+    // RabbitMQ topology — inbound core events
+    RABBITMQ_CORE_EVENTS_EXCHANGE: z.string().default('core-service.events'),
+    RABBITMQ_CORE_EVENTS_QUEUE:    z.string().default('order-service.core-events'),
+    RABBITMQ_CORE_EVENTS_DLX:      z.string().default('order-service.core-events.dlx'),
+    RABBITMQ_CORE_EVENTS_DLQ:      z.string().default('order-service.core-events.dead'),
+    RABBITMQ_PREFETCH:             z.coerce.number().positive().default(10),
+
+    // RabbitMQ topology — outbound order events (transactional outbox)
+    RABBITMQ_ORDER_EVENTS_EXCHANGE:    z.string().default('order-service.events'),
+    OUTBOUND_EVENTS_DRAIN_TICK_SEC:    z.coerce.number().positive().default(2),
+    OUTBOUND_EVENTS_BATCH_SIZE:        z.coerce.number().positive().default(50),
+
     // Delivery auto-assignment tuning
-    ASSIGNMENT_RADIUS_METERS:  z.coerce.number().positive().default(5000),
-    AGENT_ACCEPT_TIMEOUT_SEC:  z.coerce.number().positive().default(30),
-    MAX_REASSIGNMENT_ATTEMPTS: z.coerce.number().positive().default(3),
-    AGENT_SHARE_RATE:          z.coerce.number().min(0).max(1).default(1.0),
-    PRESENCE_STALE_SEC:        z.coerce.number().positive().default(90),
+    ASSIGNMENT_RADIUS_METERS:   z.coerce.number().positive().default(5000),
+    AGENT_ACCEPT_TIMEOUT_SEC:   z.coerce.number().positive().default(30),
+    MAX_REASSIGNMENT_ATTEMPTS:  z.coerce.number().positive().default(3),
+    // BPS: 10000 = 100%, 8000 = 80%. Integer math — no float money arithmetic.
+    AGENT_EARNING_SHARE_BPS:    z.coerce.number().int().min(0).max(10000).default(10000),
+    PRESENCE_STALE_SEC:              z.coerce.number().positive().default(90),
+
+    // Background sweep: cancel pending_payment orders older than this
+    PAYMENT_SESSION_TIMEOUT_MIN:     z.coerce.number().positive().default(15),
 });
 
 const staticResult = staticSchema.safeParse(process.env);
@@ -176,6 +192,18 @@ export const env = {
 
     rabbitmq: {
         url: staticData.RABBITMQ_URL,
+        coreEvents: {
+            exchange:   staticData.RABBITMQ_CORE_EVENTS_EXCHANGE,
+            queue:      staticData.RABBITMQ_CORE_EVENTS_QUEUE,
+            dlx:        staticData.RABBITMQ_CORE_EVENTS_DLX,
+            dlq:        staticData.RABBITMQ_CORE_EVENTS_DLQ,
+            prefetch:   staticData.RABBITMQ_PREFETCH,
+        },
+        orderEvents: {
+            exchange:     staticData.RABBITMQ_ORDER_EVENTS_EXCHANGE,
+            drainTickSec: staticData.OUTBOUND_EVENTS_DRAIN_TICK_SEC,
+            batchSize:    staticData.OUTBOUND_EVENTS_BATCH_SIZE,
+        },
     },
 
     internalHmacSecret: staticData.INTERNAL_HMAC_SECRET,
@@ -184,7 +212,11 @@ export const env = {
         assignmentRadiusMeters:  staticData.ASSIGNMENT_RADIUS_METERS,
         agentAcceptTimeoutSec:   staticData.AGENT_ACCEPT_TIMEOUT_SEC,
         maxReassignmentAttempts: staticData.MAX_REASSIGNMENT_ATTEMPTS,
-        agentShareRate:          staticData.AGENT_SHARE_RATE,
+        agentEarningShareBps:    staticData.AGENT_EARNING_SHARE_BPS,
         presenceStaleSec:        staticData.PRESENCE_STALE_SEC,
+    },
+
+    payment: {
+        sessionTimeoutMin: staticData.PAYMENT_SESSION_TIMEOUT_MIN,
     },
 };

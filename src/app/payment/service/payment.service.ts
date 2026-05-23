@@ -17,17 +17,18 @@ import {
     findTransactionsByOrderId,
     updateTransaction,
 } from '../repository/transaction.repo.js';
+import {
+    createPaymentSession,
+    findSessionByProviderSessionId,
+    updatePaymentSessionStatus,
+} from '../repository/payment-session.repo.js';
 import { findPaymentProviderByName } from '../repository/payment-provider.repo.js';
 import {
     insertWebhookEvent,
     markWebhookError,
     markWebhookProcessed,
 } from '../repository/webhook-event.repo.js';
-import {
-    creditRestaurantBalance,
-    debitRestaurantBalance,
-    settleRestaurantBalance,
-} from '../repository/restaurant-balance.repo.js';
+import type { FinanceService } from '../../finance/service/finance.service.js';
 import {
     InvalidWebhookSignatureError,
     PaymentAlreadyCompletedError,
@@ -44,7 +45,8 @@ import { SystemRole } from '../../../lib/auth/enums.js';
 import { orderRoom, restaurantBranchRoom, WS_EVENTS } from '../../../lib/websocket/events.js';
 import { writeOutboxEvent } from '../../../lib/outbox/writer.js';
 
-const SESSION_CACHE_TTL = 1800; // 30 minutes
+// Short-lived cache mirrors the DB row to avoid redundant reads on rapid retries.
+const SESSION_CACHE_TTL = 300;
 
 function sessionCacheKey(region: string, orderId: number): string {
     return `${region}:os:payment:session:${orderId}`;
@@ -85,6 +87,7 @@ export class PaymentService {
         @inject(TOKENS.CacheProvider)     private readonly cache: ICacheProvider,
         @inject(TOKENS.CoreServiceClient) private readonly coreClient: ICoreServiceClient,
         @inject(TOKENS.SocketServer)      private readonly socket: ISocketServer,
+        @inject(TOKENS.FinanceService)    private readonly finance: FinanceService,
     ) {}
 
     initPayment = async (
@@ -95,14 +98,15 @@ export class PaymentService {
         const order = await findOrderByPublicId(dto.orderId, region);
         if (!order) throw OrderNotFoundError();
         if (order.customerId !== customerId) throw new AppError('Forbidden', 403);
-        if (order.paymentMethod !== 'online')       throw OrderNotPayableError();
-        if (order.status !== 'pending_payment')     throw OrderNotPayableError();
+        if (order.paymentMethod !== 'online')   throw OrderNotPayableError();
+        if (order.status !== 'pending_payment') throw OrderNotPayableError();
 
+        // Fast path: a live session already exists for this order (idempotent retry).
         const cacheKey = sessionCacheKey(region, order.id);
         try {
             const cached = await this.cache.get(cacheKey);
             if (cached) return JSON.parse(cached) as { sessionUrl: string; transactionId: number };
-        } catch { /* Redis down — continue */ }
+        } catch { /* Redis down — continue to DB */ }
 
         const paymentProvider = await findPaymentProviderByName('kashier');
         if (!paymentProvider || !paymentProvider.isActive) {
@@ -111,7 +115,7 @@ export class PaymentService {
 
         const user      = await this.coreClient.getUserById(customerId);
         const amountStr = (order.total / 100).toFixed(2);
-        const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+        const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
 
         const result = await this.provider.createSession({
             orderId:             order.id,
@@ -121,8 +125,20 @@ export class PaymentService {
             merchantRedirectUrl: env.kashier.returnUrl,
             serverWebhookUrl:    `${env.appBaseUrl}/api/payments/webhook/kashier`,
             customer:            { name: user.name, email: user.email },
-            expiresAt,
+            expiresAt:           expiresAt.toISOString(),
         });
+
+        // Persist session to DB so webhooks can look it up by provider_session_id.
+        await createPaymentSession({
+            region,
+            orderId:           order.id,
+            providerId:        paymentProvider.id,
+            providerSessionId: result.sessionId,
+            sessionUrl:        result.sessionUrl,
+            amount:            order.total,
+            currency:          order.currency,
+            expiresAt,
+        }, region);
 
         const tx = await createTransaction({
             region,
@@ -190,6 +206,7 @@ export class PaymentService {
 
         const eventId = String(data.eventId ?? '');
 
+        let providerReferenceId: string | null = null;
         const trx = await db(region).transaction();
         try {
             // Idempotency: reject duplicate deliveries of the same event
@@ -209,6 +226,7 @@ export class PaymentService {
                 logger.warn('Kashier webhook: no pending charge for order', { orderId, region, eventId });
                 return;
             }
+            providerReferenceId = pending.providerReferenceId ?? null;
 
             const order = await findOrderById(orderId, region);
             if (!order) {
@@ -227,7 +245,7 @@ export class PaymentService {
                 await updateOrderStatus(orderId, region, 'placed', {}, trx);
 
                 // Credit restaurant's pending balance with the order subtotal (delivery_fee stays with platform)
-                await creditRestaurantBalance(
+                await this.finance.creditBalance(
                     order.restaurantId, region,
                     order.subtotal, order.currency,
                     trx,
@@ -257,12 +275,20 @@ export class PaymentService {
             throw err;
         }
 
+        // Update payment session status (best-effort — financial state is already committed)
+        if (providerReferenceId) {
+            const sessionStatus = isSuccess ? 'completed' : 'failed';
+            findSessionByProviderSessionId(providerReferenceId, region).then(session => {
+                if (session) updatePaymentSessionStatus(session.id, region, sessionStatus).catch(() => {});
+            }).catch(() => {});
+        }
+
         // Fire-and-forget cache invalidation
         const updatedOrder = await findOrderById(orderId, region);
         if (updatedOrder) {
             this.cache.delete(`${region}:os:order:${updatedOrder.publicId}`).catch(() => {});
             if (isSuccess) {
-                this.cache.delete(`${region}:os:balance:${updatedOrder.restaurantId}`).catch(() => {});
+                this.finance.invalidateCache(updatedOrder.restaurantId, region);
             }
         }
         this.cache.delete(sessionCacheKey(region, orderId)).catch(() => {});
@@ -376,7 +402,7 @@ export class PaymentService {
                 refundedPaymentId: refundTx.id,
             }, trx);
 
-            await debitRestaurantBalance(
+            await this.finance.debitBalance(
                 order.restaurantId, region,
                 refundAmount, tx.currency,
                 trx,
@@ -384,7 +410,7 @@ export class PaymentService {
 
             await trx.commit();
 
-            this.cache.delete(`${region}:os:balance:${order.restaurantId}`).catch(() => {});
+            this.finance.invalidateCache(order.restaurantId, region);
 
             return {
                 refundId: refundTx.id,
@@ -456,7 +482,7 @@ export class PaymentService {
         const commission = 0; // v1: no platform commission (commissionRate = 0)
 
         // Move subtotal from pending_balance to available_balance
-        await settleRestaurantBalance(
+        await this.finance.settleBalance(
             order.restaurantId, region,
             order.subtotal, commission,
             order.currency, conn,

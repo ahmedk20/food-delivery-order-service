@@ -6,7 +6,9 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx watch src/server.ts",
+    "dev:worker": "tsx watch src/worker.ts",
     "start": "node dist/server.js",
+    "start:worker": "node dist/worker.js",
     "migrate:latest": "cross-env APP_STAGE=dev tsx ./node_modules/knex/bin/cli.js --knexfile src/lib/knex/knexfile.ts migrate:latest",
     "migrate:rollback": "cross-env APP_STAGE=dev tsx ./node_modules/knex/bin/cli.js --knexfile src/lib/knex/knexfile.ts migrate:rollback",
     "migrate:down": "cross-env APP_STAGE=dev tsx ./node_modules/knex/bin/cli.js --knexfile src/lib/knex/knexfile.ts migrate:down"

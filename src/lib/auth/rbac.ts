@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { container } from '../di/container.js';
 import { TOKENS } from '../di/tokens.js';
-import { PermissionCacheService } from '../../app/rbac/service/permission-cache.service.js';
+import { PermissionCacheService } from '../rbac/permission-cache.service.js';
 import AppError from '../error/AppError.js';
 import { SystemRole } from './enums.js';
 import { NotAuthenticated, NotAuthorized } from './errors.js';

@@ -1,7 +1,6 @@
 import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '../../../lib/di/tokens.js';
 import { db } from '../../../lib/knex/knex.js';
-import AppError from '../../../lib/error/AppError.js';
 import { SystemRole } from '../../../lib/auth/enums.js';
 import { parsePaginationQuery, parseFilters } from '../../../lib/http/pagination/parse-query.js';
 import type { ICacheProvider } from '../../../pkg/cache/cache.interface.js';
@@ -11,12 +10,8 @@ import type { OrderResponseDTO } from '../../order/dto/order-response.dto.js';
 import type { OrderListItemDTO } from '../../order/dto/order-list-item.dto.js';
 import { findAllOrders, type AdminOrderFilterField, type OrderSortField } from '../../order/repository/order.repo.js';
 import { findAllTransactions, type AdminTxFilterField } from '../../payment/repository/transaction.repo.js';
-import {
-    findAllRestaurantBalances,
-    payoutFromAvailableBalance,
-    type RestaurantBalance,
-} from '../../payment/repository/restaurant-balance.repo.js';
-import { createTransaction } from '../../payment/repository/transaction.repo.js';
+import type { FinanceService } from '../../finance/service/finance.service.js';
+import type { RestaurantBalanceEntity } from '../../finance/entity/restaurant-balance.entity.js';
 import type { TransactionResponseDTO } from '../../payment/dto/transaction-response.dto.js';
 import type { Transaction } from '../../payment/entity/transaction.entity.js';
 import type { CreatePayoutDTO } from '../dto/create-payout.dto.js';
@@ -24,11 +19,9 @@ import type { PaginationMeta } from '../../../lib/http/response.js';
 
 const MAX_OUTBOX_ATTEMPTS = 5;
 
-const GEO_SET_KEY        = (region: string) => `presence:geo:${region}`;
-const META_KEY           = (region: string, agentId: number) => `presence:meta:${region}:${agentId}`;
-const BUSY_SET_KEY       = (region: string) => `presence:busy:${region}`;
-const BALANCE_CACHE_TTL  = 5;
-const balanceCacheKey    = (region: string, restaurantId: number) => `${region}:os:balance:${restaurantId}`;
+const GEO_SET_KEY  = (region: string) => `presence:geo:${region}`;
+const META_KEY     = (region: string, agentId: number) => `presence:meta:${region}:${agentId}`;
+const BUSY_SET_KEY = (region: string) => `presence:busy:${region}`;
 
 export interface DeadLetterRow {
     id: number;
@@ -65,8 +58,9 @@ function toTransactionResponseDTO(tx: Transaction): TransactionResponseDTO {
 @injectable()
 export class AdminService {
     constructor(
-        @inject(TOKENS.CacheProvider) private readonly cache: ICacheProvider,
-        @inject(TOKENS.OrderService)  private readonly orderService: OrderService,
+        @inject(TOKENS.CacheProvider)  private readonly cache: ICacheProvider,
+        @inject(TOKENS.OrderService)   private readonly orderService: OrderService,
+        @inject(TOKENS.FinanceService) private readonly finance: FinanceService,
     ) {}
 
     listAllOrders = async (
@@ -121,24 +115,8 @@ export class AdminService {
     listRestaurantBalances = async (
         region: string,
         query: Record<string, any>,
-    ): Promise<{ data: RestaurantBalance[]; meta: PaginationMeta }> => {
-        const limit        = Math.min(Number(query.limit) || 20, 100);
-        const cursor       = query.cursor ? Number(query.cursor) : undefined;
-        const restaurantId = query.restaurantId ? Number(query.restaurantId) : undefined;
-
-        if (restaurantId !== undefined) {
-            const cacheKey = balanceCacheKey(region, restaurantId);
-            try {
-                const cached = await this.cache.get(cacheKey);
-                if (cached) return JSON.parse(cached);
-            } catch { /* Redis down */ }
-
-            const result = await findAllRestaurantBalances(region, { restaurantId, cursor, limit });
-            this.cache.set(cacheKey, JSON.stringify(result), BALANCE_CACHE_TTL).catch(() => {});
-            return result;
-        }
-
-        return findAllRestaurantBalances(region, { restaurantId, cursor, limit });
+    ): Promise<{ data: RestaurantBalanceEntity[]; meta: PaginationMeta }> => {
+        return this.finance.listBalances(region, query);
     };
 
     listAgentsWithPresence = async (
@@ -261,47 +239,6 @@ export class AdminService {
         actorId: number,
         dto: CreatePayoutDTO,
     ): Promise<{ payoutId: number; amount: number; currency: string; status: string }> => {
-        const trx = await db(region).transaction();
-        try {
-            const success = await payoutFromAvailableBalance(
-                dto.restaurantId, region, dto.amount, dto.currency, trx,
-            );
-            if (!success) {
-                await trx.rollback();
-                throw new AppError('InsufficientBalance', 409);
-            }
-
-            const payout = await createTransaction({
-                region,
-                orderId:             null,
-                type:                'payout',
-                method:              'bank_transfer',
-                providerId:          null,
-                providerReferenceId: dto.providerReferenceId,
-                status:              'pending',
-                amount:              dto.amount,
-                currency:            dto.currency,
-                srcAccId:            dto.restaurantId,
-                dstAccId:            null,
-                isRefunded:          false,
-                refundedPaymentId:   null,
-                idempotencyKey:      null,
-                metadata:            { note: dto.note ?? null, initiatedBy: actorId },
-            }, region, trx);
-
-            await trx.commit();
-
-            this.cache.delete(balanceCacheKey(region, dto.restaurantId)).catch(() => {});
-
-            return {
-                payoutId: payout.id,
-                amount:   payout.amount,
-                currency: payout.currency,
-                status:   payout.status,
-            };
-        } catch (err) {
-            await trx.rollback();
-            throw err;
-        }
+        return this.finance.createPayout(region, actorId, dto);
     };
 }

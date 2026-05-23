@@ -1,7 +1,7 @@
 import { inject, injectable } from 'tsyringe';
-import { TOKENS } from '../../../lib/di/tokens.js';
-import { toMs } from '../../../pkg/utils/time.js';
-import type { ICoreServiceClient } from '../../../lib/http/core-service-client.interface.js';
+import { TOKENS } from '../di/tokens.js';
+import { toMs } from '../../pkg/utils/time.js';
+import type { ICoreServiceClient } from '../http/core-service-client.interface.js';
 
 @injectable()
 export class PermissionCacheService {
