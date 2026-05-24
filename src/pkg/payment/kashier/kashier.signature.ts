@@ -20,7 +20,7 @@ export function verifyKashierSignature(
     if (signatureKeys.length === 0) return false;
 
     const sorted = [...signatureKeys].sort();
-    const qs     = sorted.map(k => `${k}=${data[k]}`).join('&');
+    const qs     = sorted.map(k => `${k}=${encodeURIComponent(String(data[k] ?? ''))}`).join('&');
 
     const expectedHex = createHmac('sha256', webhookSecret).update(qs).digest('hex');
 

@@ -1,6 +1,6 @@
 import { injectable } from 'tsyringe';
 import { BaseCoreClient } from './base.client.js';
-import type { AddressData } from '../http/core-service-client.interface.js';
+import type { AddressData } from './types.js';
 
 @injectable()
 export class AddressClient extends BaseCoreClient {

@@ -3,7 +3,11 @@ import { container } from 'tsyringe';
 import { TOKENS } from './tokens.js';
 import { env } from '../config/env.js';
 import { cacheProvider } from '../cache/init.js';
-import { CoreServiceClient } from '../http/core-service-client.js';
+import { ProductClient } from '../core-client/product.client.js';
+import { BranchClient }  from '../core-client/branch.client.js';
+import { AddressClient } from '../core-client/address.client.js';
+import { UserClient }    from '../core-client/user.client.js';
+import { RbacClient }    from '../core-client/rbac.client.js';
 import { KashierPaymentProvider } from '../../pkg/payment/kashier/index.js';
 import { RabbitMQClient } from '../../pkg/messaging/rabbitmq/rabbitmq.client.js';
 import { PermissionCacheService } from '../rbac/permission-cache.service.js';
@@ -16,6 +20,8 @@ import { PaymentService } from '../../app/payment/service/payment.service.js';
 import { PaymentController } from '../../app/payment/controller/payment.controller.js';
 import { DeliveryService } from '../../app/delivery/service/delivery.service.js';
 import { DeliveryController } from '../../app/delivery/controller/delivery.controller.js';
+import { SettlementService } from '../../app/delivery/service/settlement.service.js';
+import { AssignmentService } from '../../app/assignment/service/assignment.service.js';
 import { AgentService } from '../../app/delivery-agent/service/agent.service.js';
 import { AgentController } from '../../app/delivery-agent/controller/agent.controller.js';
 import { RestaurantOrderService } from '../../app/restaurant-orders/service/restaurant-order.service.js';
@@ -23,11 +29,16 @@ import { RestaurantOrderController } from '../../app/restaurant-orders/controlle
 import { AdminService } from '../../app/admin/service/admin.service.js';
 import { AdminController } from '../../app/admin/controller/admin.controller.js';
 import { FinanceService } from '../../app/finance/service/finance.service.js';
+import { FinanceController } from '../../app/finance/controller/finance.controller.js';
 import { socketServer } from '../websocket/ws-server.js';
 
 // ── Infrastructure ────────────────────────────────────────────────────────────
 container.registerInstance(TOKENS.CacheProvider, cacheProvider);
-container.registerSingleton(TOKENS.CoreServiceClient, CoreServiceClient);
+container.registerSingleton(TOKENS.ProductClient, ProductClient);
+container.registerSingleton(TOKENS.BranchClient,  BranchClient);
+container.registerSingleton(TOKENS.AddressClient, AddressClient);
+container.registerSingleton(TOKENS.UserClient,    UserClient);
+container.registerSingleton(TOKENS.RbacClient,    RbacClient);
 container.registerSingleton(TOKENS.PermissionCacheService, PermissionCacheService);
 
 const messageBroker = new RabbitMQClient({
@@ -54,6 +65,8 @@ container.registerSingleton(TOKENS.OrderService, OrderService);
 container.registerSingleton(TOKENS.OrderController, OrderController);
 container.registerSingleton(TOKENS.PaymentService, PaymentService);
 container.registerSingleton(TOKENS.PaymentController, PaymentController);
+container.registerSingleton(TOKENS.SettlementService,  SettlementService);
+container.registerSingleton(TOKENS.AssignmentService,  AssignmentService);
 container.registerSingleton(TOKENS.DeliveryService, DeliveryService);
 container.registerSingleton(TOKENS.DeliveryController, DeliveryController);
 container.registerSingleton(TOKENS.AgentService, AgentService);
@@ -63,5 +76,6 @@ container.registerSingleton(TOKENS.RestaurantOrderController, RestaurantOrderCon
 container.registerSingleton(TOKENS.AdminService, AdminService);
 container.registerSingleton(TOKENS.AdminController, AdminController);
 container.registerSingleton(TOKENS.FinanceService, FinanceService);
+container.registerSingleton(TOKENS.FinanceController, FinanceController);
 
 export { container };

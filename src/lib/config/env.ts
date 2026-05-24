@@ -72,7 +72,14 @@ const staticSchema = z.object({
     MAX_REASSIGNMENT_ATTEMPTS:  z.coerce.number().positive().default(3),
     // BPS: 10000 = 100%, 8000 = 80%. Integer math — no float money arithmetic.
     AGENT_EARNING_SHARE_BPS:    z.coerce.number().int().min(0).max(10000).default(10000),
-    PRESENCE_STALE_SEC:              z.coerce.number().positive().default(90),
+    PRESENCE_STALE_SEC:         z.coerce.number().positive().default(90),
+    // Assignment worker: how many orders to scan per tick, max candidates per broadcast
+    ASSIGNMENT_BATCH_SIZE:      z.coerce.number().positive().default(20),
+    ASSIGNMENT_CANDIDATES:      z.coerce.number().positive().default(5),
+    // How long offer lives in Redis (agent must claim within this window)
+    OFFER_TTL_SEC:              z.coerce.number().positive().default(30),
+    // How long atomic claim lock lives (prevents double-delivery on retry)
+    CLAIM_TTL_SEC:              z.coerce.number().positive().default(300),
 
     // Background sweep: cancel pending_payment orders older than this
     PAYMENT_SESSION_TIMEOUT_MIN:     z.coerce.number().positive().default(15),
@@ -214,6 +221,10 @@ export const env = {
         maxReassignmentAttempts: staticData.MAX_REASSIGNMENT_ATTEMPTS,
         agentEarningShareBps:    staticData.AGENT_EARNING_SHARE_BPS,
         presenceStaleSec:        staticData.PRESENCE_STALE_SEC,
+        assignmentBatchSize:     staticData.ASSIGNMENT_BATCH_SIZE,
+        candidates:              staticData.ASSIGNMENT_CANDIDATES,
+        offerTtlSec:             staticData.OFFER_TTL_SEC,
+        claimTtlSec:             staticData.CLAIM_TTL_SEC,
     },
 
     payment: {

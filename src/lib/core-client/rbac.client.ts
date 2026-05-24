@@ -1,6 +1,6 @@
 import { injectable } from 'tsyringe';
 import { BaseCoreClient } from './base.client.js';
-import type { RolePermissionsData } from '../http/core-service-client.interface.js';
+import type { RolePermissionsData } from './types.js';
 
 @injectable()
 export class RbacClient extends BaseCoreClient {

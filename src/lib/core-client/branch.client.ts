@@ -1,6 +1,6 @@
 import { injectable } from 'tsyringe';
 import { BaseCoreClient } from './base.client.js';
-import type { BranchMetadata } from '../http/core-service-client.interface.js';
+import type { BranchMetadata } from './types.js';
 
 @injectable()
 export class BranchClient extends BaseCoreClient {

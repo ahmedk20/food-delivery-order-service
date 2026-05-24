@@ -7,7 +7,7 @@ import logger from '../../../lib/logger/logger.js';
 import { db } from '../../../lib/knex/knex.js';
 import type { ICacheProvider } from '../../../pkg/cache/cache.interface.js';
 import type { IPaymentProvider } from '../../../pkg/payment/payment-provider.interface.js';
-import type { ICoreServiceClient } from '../../../lib/http/core-service-client.interface.js';
+import type { UserClient } from '../../../lib/core-client/user.client.js';
 import type { ISocketServer } from '../../../lib/websocket/ws-server.js';
 import { findOrderById, findOrderByPublicId, updateOrderStatus } from '../../order/repository/order.repo.js';
 import {
@@ -85,7 +85,7 @@ export class PaymentService {
     constructor(
         @inject(TOKENS.PaymentProvider)   private readonly provider: IPaymentProvider,
         @inject(TOKENS.CacheProvider)     private readonly cache: ICacheProvider,
-        @inject(TOKENS.CoreServiceClient) private readonly coreClient: ICoreServiceClient,
+        @inject(TOKENS.UserClient)        private readonly userClient: UserClient,
         @inject(TOKENS.SocketServer)      private readonly socket: ISocketServer,
         @inject(TOKENS.FinanceService)    private readonly finance: FinanceService,
     ) {}
@@ -113,7 +113,7 @@ export class PaymentService {
             throw new AppError('Payment provider unavailable', 503);
         }
 
-        const user      = await this.coreClient.getUserById(customerId);
+        const user      = await this.userClient.getUserById(customerId);
         const amountStr = (order.total / 100).toFixed(2);
         const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
 

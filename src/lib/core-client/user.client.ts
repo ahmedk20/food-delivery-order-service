@@ -1,6 +1,6 @@
 import { injectable } from 'tsyringe';
 import { BaseCoreClient } from './base.client.js';
-import type { UserData } from '../http/core-service-client.interface.js';
+import type { UserData } from './types.js';
 
 @injectable()
 export class UserClient extends BaseCoreClient {

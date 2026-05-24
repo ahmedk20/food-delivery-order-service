@@ -4,13 +4,17 @@ export const TOKENS = {
     Logger:                 Symbol('Logger'),
     PermissionCacheService: Symbol('PermissionCacheService'),
 
-    // WebSocket server (Phase 5) — services inject ISocketServer, not SocketServer
+    // WebSocket server — services inject ISocketServer, not SocketServer
     SocketServer: Symbol('SocketServer'),
 
-    // HTTP client (Phase 2)
-    CoreServiceClient: Symbol('CoreServiceClient'),
+    // Core-service domain clients — each service injects only the client(s) it needs
+    ProductClient: Symbol('ProductClient'),
+    BranchClient:  Symbol('BranchClient'),
+    AddressClient: Symbol('AddressClient'),
+    UserClient:    Symbol('UserClient'),
+    RbacClient:    Symbol('RbacClient'),
 
-    // Messaging (Phase 11)
+    // Messaging
     MessageBroker: Symbol('MessageBroker'),
 
     // Orders (Phase 3)
@@ -27,6 +31,10 @@ export const TOKENS = {
     // Delivery (Phase 6)
     DeliveryService:    Symbol('DeliveryService'),
     DeliveryController: Symbol('DeliveryController'),
+    SettlementService:  Symbol('SettlementService'),
+
+    // Assignment (Phase 6b) — offer/claim/reject worker flow
+    AssignmentService: Symbol('AssignmentService'),
 
     // Delivery agent (Phase 7)
     AgentService:    Symbol('AgentService'),
@@ -41,5 +49,6 @@ export const TOKENS = {
     AdminController: Symbol('AdminController'),
 
     // Finance
-    FinanceService: Symbol('FinanceService'),
+    FinanceService:    Symbol('FinanceService'),
+    FinanceController: Symbol('FinanceController'),
 };

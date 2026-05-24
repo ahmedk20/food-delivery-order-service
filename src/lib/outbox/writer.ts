@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { Knex } from 'knex';
 
 export async function writeOutboxEvent(
@@ -9,6 +10,7 @@ export async function writeOutboxEvent(
 ): Promise<void> {
     await conn('outbox').insert({
         region,
+        event_id:     randomUUID(),
         event_type:   eventType,
         aggregate_id: aggregateId,
         payload:      JSON.stringify(payload),

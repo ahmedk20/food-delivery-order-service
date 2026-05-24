@@ -2,6 +2,7 @@ import type { Knex } from 'knex';
 
 export type OutboxRow = {
     id: number;
+    event_id: string;
     event_type: string;
     aggregate_id: string;
     payload: string;
@@ -14,7 +15,7 @@ export async function claimPendingBatch(
     batchSize: number,
 ): Promise<OutboxRow[]> {
     const result = await knex.raw<{ rows: OutboxRow[] }>(`
-        SELECT id, event_type, aggregate_id, payload, attempts
+        SELECT id, event_id, event_type, aggregate_id, payload, attempts
         FROM outbox
         WHERE dispatched_at IS NULL AND attempts < :maxAttempts
         ORDER BY created_at ASC

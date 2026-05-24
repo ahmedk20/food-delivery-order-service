@@ -4,7 +4,7 @@ import { TOKENS } from '../../lib/di/tokens.js';
 import { requireInternalHmac } from '../../lib/auth/internal.js';
 import { sendSuccess } from '../../lib/http/response.js';
 import AppError from '../../lib/error/AppError.js';
-import { handleCoreEventPayload } from '../order/core-events.handlers.js';
+import { handleCoreEventPayload } from '../../lib/core-events/handlers.js';
 import type { ICacheProvider } from '../../pkg/cache/cache.interface.js';
 import type { PermissionCacheService } from '../../lib/rbac/permission-cache.service.js';
 

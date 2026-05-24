@@ -12,7 +12,8 @@ import {
     findRestaurantBalance,
     findAllRestaurantBalances,
 } from '../repository/finance.repo.js';
-import { createTransaction } from '../../payment/repository/transaction.repo.js';
+import { createTransaction, findPayoutsByRestaurant } from '../../payment/repository/transaction.repo.js';
+import type { Transaction } from '../../payment/entity/transaction.entity.js';
 import type { CreatePayoutDTO } from '../../admin/dto/create-payout.dto.js';
 import type { PaginationMeta } from '../../../lib/http/response.js';
 
@@ -102,6 +103,16 @@ export class FinanceService {
         }
 
         return findAllRestaurantBalances(region, { restaurantId, cursor, limit });
+    };
+
+    listPayouts = async (
+        restaurantId: number,
+        region: string,
+        query: Record<string, any>,
+    ): Promise<{ data: Transaction[]; meta: PaginationMeta }> => {
+        const limit  = Math.min(Number(query.limit) || 20, 100);
+        const cursor = query.cursor ? Number(query.cursor) : undefined;
+        return findPayoutsByRestaurant(restaurantId, region, { cursor, limit });
     };
 
     // ── Admin payout ──────────────────────────────────────────────────────────

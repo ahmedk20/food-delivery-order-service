@@ -6,8 +6,11 @@ export const WS_EVENTS = {
     AGENT_LOCATION_UPDATED:  'agent.location_updated',
     PAYMENT_COMPLETED:       'payment.completed',
     PAYMENT_FAILED:          'payment.failed',
+    TASK_OFFERED:            'task.offered',
     TASK_ASSIGNED:           'task.assigned',
     TASK_CANCELLED:          'task.cancelled',
+    OFFER_CANCELLED:         'offer.cancelled',
+    ASSIGNMENT_EXHAUSTED:    'assignment.exhausted',
     DELIVERY_STATUS_CHANGED: 'delivery.status_changed',
 } as const;
 

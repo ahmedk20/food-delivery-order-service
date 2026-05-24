@@ -8,6 +8,7 @@ import { TOKENS } from './lib/di/tokens.js';
 import { JobRegistry } from './lib/jobs/job-registry.js';
 import { createOutboxDrainJobs } from './lib/outbox/jobs.js';
 import { createPaymentSweepJobs } from './app/payment/jobs.js';
+import { createAssignmentJobs } from './app/assignment/jobs.js';
 import { startCoreEventConsumer } from './lib/messaging/core-event-handler.js';
 import type { IMessageBroker } from './pkg/messaging/message-broker.interface.js';
 import type { ICacheProvider } from './pkg/cache/cache.interface.js';
@@ -38,6 +39,7 @@ async function main() {
     const registry = new JobRegistry();
     registry.register(...createOutboxDrainJobs(broker, env.regions));
     registry.register(...createPaymentSweepJobs(env.regions));
+    registry.register(...createAssignmentJobs());
     registry.startAll();
 
     logger.info('Worker running', { regions: env.regions });

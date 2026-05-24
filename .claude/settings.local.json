@@ -4,7 +4,9 @@
       "Bash(npx tsc *)",
       "Bash(node *)",
       "Bash(Get-ChildItem *)",
-      "Bash(Remove-Item *)"
+      "Bash(Remove-Item *)",
+      "Read(//c/Users/PC/Downloads/order-service-before-hw/**)",
+      "Bash(dir /s /b)"
     ]
   }
 }

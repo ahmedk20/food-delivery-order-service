@@ -1,7 +1,7 @@
 import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '../di/tokens.js';
 import { toMs } from '../../pkg/utils/time.js';
-import type { ICoreServiceClient } from '../http/core-service-client.interface.js';
+import type { RbacClient } from '../core-client/rbac.client.js';
 
 @injectable()
 export class PermissionCacheService {
@@ -9,14 +9,14 @@ export class PermissionCacheService {
     private readonly TTL = toMs(1, 'h');
 
     constructor(
-        @inject(TOKENS.CoreServiceClient) private readonly coreClient: ICoreServiceClient,
+        @inject(TOKENS.RbacClient) private readonly rbacClient: RbacClient,
     ) {}
 
     async getPermissions(roleName: string): Promise<string[]> {
         const cached = this.cache.get(roleName);
         if (cached && Date.now() - cached.cachedAt < this.TTL) return cached.permissions;
 
-        const result = await this.coreClient.getRolePermissions(roleName);
+        const result = await this.rbacClient.getRolePermissions(roleName);
         const permissions = result.permissions.map(p => p.permission);
         this.cache.set(roleName, { permissions, cachedAt: Date.now() });
         return permissions;

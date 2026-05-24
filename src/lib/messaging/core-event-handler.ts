@@ -4,7 +4,7 @@ import { env } from '../config/env.js';
 import type { IMessageBroker, ConsumerOptions } from '../../pkg/messaging/message-broker.interface.js';
 import type { ICacheProvider } from '../../pkg/cache/cache.interface.js';
 import type { PermissionCacheService } from '../rbac/permission-cache.service.js';
-import { handleCoreEventPayload } from '../../app/order/core-events.handlers.js';
+import { handleCoreEventPayload } from '../core-events/handlers.js';
 
 function buildConsumerOpts(): ConsumerOptions {
     return {

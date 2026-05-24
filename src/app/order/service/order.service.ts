@@ -10,7 +10,7 @@ import type { ICacheProvider } from '../../../pkg/cache/cache.interface.js';
 import type { ISocketServer } from '../../../lib/websocket/ws-server.js';
 import { currencyForCountry } from '../../../pkg/utils/currency.js';
 import { sumMinor, multiplyMinor } from '../../../pkg/utils/money.js';
-import type { ICoreServiceClient } from '../../../lib/http/core-service-client.interface.js';
+import type { ProductClient } from '../../../lib/core-client/product.client.js';
 import type { CoreDataCacheService } from './core-data-cache.service.js';
 import type { OrderStatusService } from './order-status.service.js';
 import type { PlaceOrderDTO } from '../dto/place-order.dto.js';
@@ -135,7 +135,7 @@ export class OrderService {
         @inject(TOKENS.CacheProvider)        private readonly cache: ICacheProvider,
         @inject(TOKENS.SocketServer)         private readonly socket: ISocketServer,
         @inject(TOKENS.PaymentService)       private readonly paymentService: PaymentService,
-        @inject(TOKENS.CoreServiceClient)    private readonly coreClient: ICoreServiceClient,
+        @inject(TOKENS.ProductClient)        private readonly productClient: ProductClient,
         @inject(TOKENS.CoreDataCacheService) private readonly coreData: CoreDataCacheService,
         @inject(TOKENS.OrderStatusService)   private readonly statusService: OrderStatusService,
     ) {}
@@ -282,7 +282,7 @@ export class OrderService {
             await trx.commit();
 
             // 8. After commit: reserve stock in core service (out-of-transaction)
-            this.coreClient.reserveStock(
+            this.productClient.reserveStock(
                 dto.branchId,
                 dto.items.map((item, i) => ({ productId: products[i].id, quantity: item.quantity })),
                 correlationId,

@@ -6,6 +6,7 @@ import { deliveryRouter } from './app/delivery/routes.js';
 import { agentRouter } from './app/delivery-agent/routes.js';
 import { restaurantOrderRouter } from './app/restaurant-orders/routes.js';
 import { adminRouter } from './app/admin/routes.js';
+import { financeRouter } from './app/finance/routes.js';
 import { internalRouter } from './app/internal/routes.js';
 
 export const routes = Router();
@@ -18,4 +19,5 @@ routes.use('/deliveries', deliveryRouter);
 routes.use('/agents', agentRouter);
 routes.use('/restaurant/orders', restaurantOrderRouter);
 routes.use('/admin', adminRouter);
+routes.use('/restaurant/finance', financeRouter);
 routes.use('/internal', internalRouter);

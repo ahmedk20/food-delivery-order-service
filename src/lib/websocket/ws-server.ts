@@ -1,6 +1,6 @@
 import { Server as SocketIOServer } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
-import { createClient } from 'redis';
+import { Redis } from 'ioredis';
 import type { Server as HttpServer } from 'http';
 import { injectable } from 'tsyringe';
 import { env } from '../config/env.js';
@@ -50,13 +50,13 @@ export class SocketServer implements ISocketServer {
         // Two dedicated Redis clients are required by the adapter:
         // one for publishing and one for subscribing. They must be separate
         // connections because a subscribed client cannot issue other commands.
-        const pubClient = createClient({
-            socket: { host: env.redis.host, port: env.redis.port },
+        const redisOpts = {
+            host:     env.redis.host,
+            port:     env.redis.port,
             password: env.redis.password,
-        });
+        };
+        const pubClient = new Redis(redisOpts);
         const subClient = pubClient.duplicate();
-
-        await Promise.all([pubClient.connect(), subClient.connect()]);
 
         this.io = new SocketIOServer(httpServer, {
             path: '/ws',

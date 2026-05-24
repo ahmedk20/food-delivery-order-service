@@ -126,6 +126,31 @@ export async function createTransaction(
     return toEntity(row);
 }
 
+export async function findPayoutsByRestaurant(
+    restaurantId: number,
+    region: string,
+    opts: { cursor?: number; limit: number },
+): Promise<{ data: Transaction[]; meta: { hasMore: boolean; nextCursor: number | null; count: number } }> {
+    let query = db(region)('transactions')
+        .select(COLUMNS)
+        .where({ type: 'payout', src_acc_id: restaurantId })
+        .orderBy('id', 'desc');
+
+    if (opts.cursor !== undefined) {
+        query = query.where('id', '<', opts.cursor);
+    }
+
+    query = query.limit(opts.limit + 1);
+
+    const rows    = await query;
+    const hasMore = rows.length > opts.limit;
+    const data    = rows.slice(0, opts.limit).map(toEntity);
+    return {
+        data,
+        meta: { hasMore, nextCursor: hasMore ? data[data.length - 1].id : null, count: data.length },
+    };
+}
+
 export async function updateTransaction(
     id: number,
     region: string,

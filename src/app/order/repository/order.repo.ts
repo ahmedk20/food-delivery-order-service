@@ -229,6 +229,47 @@ export async function updateOrderStatus(
     return toEntity(row);
 }
 
+/**
+ * Returns the oldest READY orders that have no assigned agent, up to `limit`.
+ * Backed by idx_orders_status_created_at (partial WHERE status IN ('ready','assigned')).
+ * Called by the assignment worker tick.
+ */
+export async function findReadyUnassigned(limit: number, region: string): Promise<OrderEntity[]> {
+    const rows = await db(region)('orders')
+        .select(COLUMNS)
+        .where('status', 'ready')
+        .whereNull('delivery_agent_id')
+        .orderBy('created_at', 'asc')
+        .limit(limit);
+    return rows.map(toEntity);
+}
+
+/**
+ * Conditional claim — atomically moves an order from READY to ASSIGNED and
+ * stamps the agent + assigned_at ONLY if the row is still ready and unassigned.
+ * Returns the updated entity on success, undefined if the conditions were not met
+ * (another claim won the race; AssignmentService should roll back and throw).
+ */
+export async function claimReadyOrderForAgent(
+    publicId: string,
+    agentId: number,
+    region: string,
+    conn: Knex,
+): Promise<OrderEntity | undefined> {
+    const now = new Date();
+    const [row] = await conn('orders')
+        .where({ public_id: publicId, status: 'ready' })
+        .whereNull('delivery_agent_id')
+        .update({
+            status:            'assigned',
+            delivery_agent_id: agentId,
+            assigned_at:       now,
+            updated_at:        now,
+        })
+        .returning(COLUMNS);
+    return row ? toEntity(row) : undefined;
+}
+
 export async function incrementReassignmentCount(
     id: number,
     region: string,

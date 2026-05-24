@@ -19,4 +19,9 @@ export interface ICacheProvider {
 
     // Atomic SETNX — returns true if key was set (first caller), false if it already existed.
     trySet(key: string, value: string, ttlSeconds: number): Promise<boolean>;
+
+    // Counter operations — used by assignment worker for per-order attempt tracking
+    incr(key: string): Promise<number>;
+    expire(key: string, ttlSeconds: number): Promise<void>;
+    ttl(key: string): Promise<number>;
 }

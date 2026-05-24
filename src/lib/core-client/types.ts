@@ -44,37 +44,3 @@ export interface BranchMetadata {
     region: string;
     countryCode: string;
 }
-
-export interface ICoreServiceClient {
-    getProductWithBranchDetails(
-        productId: number,
-        branchId: number,
-        correlationId?: string,
-    ): Promise<ProductBranchData>;
-
-    getAddressById(
-        addressId: number,
-        correlationId?: string,
-    ): Promise<AddressData>;
-
-    getUserById(
-        userId: number,
-        correlationId?: string,
-    ): Promise<UserData>;
-
-    getRolePermissions(
-        roleName: string,
-        correlationId?: string,
-    ): Promise<RolePermissionsData>;
-
-    getBranchMetadata(
-        branchId: number,
-        correlationId?: string,
-    ): Promise<BranchMetadata>;
-
-    reserveStock(
-        branchId: number,
-        items: { productId: number; quantity: number }[],
-        correlationId?: string,
-    ): Promise<void>;
-}

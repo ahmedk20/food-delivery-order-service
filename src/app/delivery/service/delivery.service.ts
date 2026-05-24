@@ -9,20 +9,17 @@ import type { ISocketServer } from '../../../lib/websocket/ws-server.js';
 import {
     WS_EVENTS,
     agentRoom,
-    orderRoom,
     restaurantBranchRoom,
     customerRoom,
 } from '../../../lib/websocket/events.js';
-import { writeOutboxEvent } from '../../../lib/outbox/writer.js';
 import type { OrderService } from '../../order/service/order.service.js';
-import type { PaymentService } from '../../payment/service/payment.service.js';
+import type { SettlementService } from './settlement.service.js';
 import {
     findDeliveryById,
     findActiveDeliveryByOrderId,
     createDelivery,
     updateDelivery,
 } from '../repository/delivery.repo.js';
-import { createAgentEarnings } from '../repository/agent-earnings.repo.js';
 import { incrementReassignmentCount } from '../../order/repository/order.repo.js';
 import {
     OrderNotReadyError,
@@ -48,10 +45,10 @@ const CANDIDATE_LIMIT = 5;
 @injectable()
 export class DeliveryService {
     constructor(
-        @inject(TOKENS.CacheProvider)  private readonly cache: ICacheProvider,
-        @inject(TOKENS.SocketServer)   private readonly socket: ISocketServer,
-        @inject(TOKENS.OrderService)   private readonly orderService: OrderService,
-        @inject(TOKENS.PaymentService) private readonly paymentService: PaymentService,
+        @inject(TOKENS.CacheProvider)     private readonly cache: ICacheProvider,
+        @inject(TOKENS.SocketServer)      private readonly socket: ISocketServer,
+        @inject(TOKENS.OrderService)      private readonly orderService: OrderService,
+        @inject(TOKENS.SettlementService) private readonly settlementService: SettlementService,
     ) {}
 
     assignDelivery = async (
@@ -197,7 +194,7 @@ export class DeliveryService {
         const now = new Date();
 
         if (to === 'delivered') {
-            await this._settleAndDeliver(delivery.id, delivery, order, region, agentId, now);
+            await this.settlementService.settleAndDeliver(delivery.id, order, region, agentId, now);
         } else {
             const trx = await db(region).transaction();
             try {
@@ -244,7 +241,7 @@ export class DeliveryService {
         const updated = await findDeliveryById(delivery.id, region);
         if (!updated) throw DeliveryNotFoundError();
 
-        if (to !== 'rejected') {
+        if (to !== 'rejected' && to !== 'delivered') {
             const wsPayload = {
                 orderPublicId: order.publicId,
                 deliveryId:    delivery.id,
@@ -287,73 +284,4 @@ export class DeliveryService {
         throw NoEligibleAgentsError();
     }
 
-    private async _settleAndDeliver(
-        deliveryId: number,
-        delivery: import('../entity/delivery.entity.js').DeliveryEntity,
-        order: import('../../order/entity/order.entity.js').OrderEntity,
-        region: string,
-        agentId: number,
-        now: Date,
-    ): Promise<void> {
-        const agentEarning = Math.floor(order.deliveryFee * env.delivery.agentEarningShareBps / 10_000);
-
-        const trx = await db(region).transaction();
-        try {
-            // Settle payment + restaurant balance (online verify, COD flip, balance move)
-            await this.paymentService.settleDelivery(order, region, trx);
-
-            await updateDelivery(deliveryId, region, {
-                status:        'delivered',
-                deliveredAt:   now,
-                earningAmount: agentEarning > 0 ? agentEarning : null,
-            }, trx);
-
-            await this.orderService.internalUpdateStatus(order.id, region, 'delivered', {
-                deliveredAt: now,
-            }, trx);
-
-            if (agentEarning > 0) {
-                await createAgentEarnings({
-                    agentId,
-                    orderId:    order.id,
-                    deliveryId,
-                    amount:     agentEarning,
-                    currency:   order.currency,
-                    region,
-                }, trx);
-            }
-
-            await writeOutboxEvent(trx, region, 'order.delivered', String(order.id), {
-                orderId:     order.id,
-                customerId:  order.customerId,
-                agentId,
-                deliveredAt: now.toISOString(),
-            });
-
-            await trx.commit();
-        } catch (err) {
-            await trx.rollback();
-            throw err;
-        }
-
-        // Post-commit side effects (best-effort)
-        this.cache.sRem(BUSY_SET_KEY(region), String(agentId)).catch(() => {});
-        this.cache.delete(`${region}:os:order:${order.publicId}`).catch(() => {});
-        this.cache.delete(`${region}:os:balance:${order.restaurantId}`).catch(() => {});
-
-        const deliveredPayload = {
-            orderPublicId: order.publicId,
-            deliveryId,
-            status:        'delivered' as const,
-            updatedAt:     now.toISOString(),
-        };
-        this.socket.emitToRoom(customerRoom(order.customerId), WS_EVENTS.DELIVERY_STATUS_CHANGED, deliveredPayload);
-        this.socket.emitToRoom(restaurantBranchRoom(order.branchId), WS_EVENTS.DELIVERY_STATUS_CHANGED, deliveredPayload);
-        this.socket.emitToRoom(agentRoom(agentId), WS_EVENTS.DELIVERY_STATUS_CHANGED, deliveredPayload);
-        this.socket.emitToRoom(orderRoom(order.publicId), WS_EVENTS.ORDER_STATUS_CHANGED, {
-            orderId:   order.publicId,
-            status:    'delivered',
-            updatedAt: now.toISOString(),
-        });
-    }
 }
