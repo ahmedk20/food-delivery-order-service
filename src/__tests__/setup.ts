@@ -40,7 +40,7 @@ const createMockTrx = () => {
 const mockDb: any = vi.fn((_region: string) => {
     const chain: any = mockKnexChain();
     chain.transaction = vi.fn().mockResolvedValue(createMockTrx());
-    const callable = vi.fn((tableName: string) => mockKnexChain());
+    const callable: any = vi.fn((tableName: string) => mockKnexChain());
     callable.transaction = chain.transaction;
     callable.raw = chain.raw;
     return callable;

@@ -1,6 +1,7 @@
 import type { OrderResponseDTO, OrderSummaryResponseDTO, OrderItemResponseDTO } from '../../app/order/dto/order-response.dto.js';
 import type { OrderListItemDTO } from '../../app/order/dto/order-list-item.dto.js';
 import type { DeliveryResponseDTO } from '../../app/delivery/dto/delivery-response.dto.js';
+import type { TransactionResponseDTO } from '../../app/payment/dto/transaction-response.dto.js';
 
 export function makeOrderItem(overrides: Partial<OrderItemResponseDTO> = {}): OrderItemResponseDTO {
     return {
@@ -88,7 +89,7 @@ export function makeDeliveryResponse(overrides: Partial<DeliveryResponseDTO> = {
     };
 }
 
-export function makeTransactionResponse(overrides: Record<string, unknown> = {}) {
+export function makeTransactionResponse(overrides: Partial<TransactionResponseDTO> = {}): TransactionResponseDTO {
     return {
         id:                  1,
         orderPublicId:       'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d',
