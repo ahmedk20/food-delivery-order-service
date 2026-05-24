@@ -12,7 +12,9 @@
     "migrate:latest": "cross-env APP_STAGE=dev tsx ./node_modules/knex/bin/cli.js --knexfile src/lib/knex/knexfile.ts migrate:latest",
     "migrate:rollback": "cross-env APP_STAGE=dev tsx ./node_modules/knex/bin/cli.js --knexfile src/lib/knex/knexfile.ts migrate:rollback",
     "migrate:down": "cross-env APP_STAGE=dev tsx ./node_modules/knex/bin/cli.js --knexfile src/lib/knex/knexfile.ts migrate:down",
-    "migrate:all": "tsx scripts/migrate-all.ts"
+    "migrate:all": "tsx scripts/migrate-all.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@socket.io/redis-adapter": "^8.3.0",
@@ -41,10 +43,13 @@
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "^25.2.3",
+    "@types/supertest": "^7.2.0",
     "@types/uuid": "^10.0.0",
     "cross-env": "^10.1.0",
+    "supertest": "^7.2.2",
     "tsx": "^4.19.4",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.7"
   },
   "private": true
 }
