@@ -44,7 +44,7 @@ export async function up(knex: Knex): Promise<void> {
         SELECT partman.create_parent(
             p_parent_table    => 'public.deliveries',
             p_control         => 'assigned_at',
-            p_interval        => 'monthly',
+            p_interval        => '1 month',
             p_premake         => 4,
             p_start_partition => to_char(NOW() - INTERVAL '1 month', 'YYYY-MM-01')
         )
