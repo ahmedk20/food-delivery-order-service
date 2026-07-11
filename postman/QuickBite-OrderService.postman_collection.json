@@ -1,0 +1,665 @@
+{
+  "info": {
+    "_postman_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "name": "QuickBite – Order Service",
+    "description": "Order & Payment microservice for the QuickBite food-delivery platform.\n\n**Auth:** JWT sent as `access_token` cookie. Set the `access_token` variable in your environment.\n\n**Region:** Every request (except Health and Internal webhook) requires `X-Region` header. Set the `region` environment variable (e.g. `eg`, `ksa`).\n\n**Idempotency:** Idempotent endpoints automatically receive a new `Idempotency-Key` via the collection pre-request script.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:3001", "type": "string" },
+    { "key": "api_url", "value": "{{base_url}}/api", "type": "string" }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Refresh idempotency key on every run so replays are distinct",
+          "pm.globals.set('idempotency_key', pm.variables.replaceIn('{{$guid}}'));"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{api_url}}/health", "host": ["{{api_url}}"], "path": ["health"] },
+            "description": "Returns service health status. No auth required."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Orders",
+      "description": "Order lifecycle: placement, detail lookup, status transitions, and customer order history.",
+      "item": [
+        {
+          "name": "Place Order",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}" },
+              { "key": "Idempotency-Key", "value": "{{idempotency_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"branchId\": 1,\n  \"deliveryAddressId\": 1,\n  \"paymentMethod\": \"online\",\n  \"items\": [\n    {\n      \"productId\": 1,\n      \"quantity\": 2,\n      \"notes\": \"No onions\"\n    }\n  ],\n  \"notes\": \"Ring the bell\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{api_url}}/orders", "host": ["{{api_url}}"], "path": ["orders"] },
+            "description": "Place a new order. Role: `customer`. Idempotent.\n\n**paymentMethod**: `online` | `cod`\n\nOn success the response includes `publicId` (UUID) — save it to `order_public_id`."
+          }
+        },
+        {
+          "name": "Get Order by Public ID",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}" }
+            ],
+            "url": {
+              "raw": "{{api_url}}/orders/{{order_public_id}}",
+              "host": ["{{api_url}}"],
+              "path": ["orders", "{{order_public_id}}"]
+            },
+            "description": "Fetch a single order by its UUID. Any authenticated role; service enforces ownership. Sets `X-Cache: HIT|MISS`."
+          }
+        },
+        {
+          "name": "Update Order Status",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}" },
+              { "key": "Idempotency-Key", "value": "{{idempotency_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"accepted\",\n  \"reason\": null,\n  \"estimatedDeliveryAt\": \"2026-05-25T14:00:00.000Z\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{api_url}}/orders/{{order_public_id}}/status",
+              "host": ["{{api_url}}"],
+              "path": ["orders", "{{order_public_id}}", "status"]
+            },
+            "description": "Update order status. Service enforces valid transitions.\n\n**status** values: `accepted` | `rejected` | `preparing` | `ready` | `cancelled`\n\n`estimatedDeliveryAt` – ISO 8601, optional."
+          }
+        },
+        {
+          "name": "List My Orders (Customer)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}" }
+            ],
+            "url": {
+              "raw": "{{api_url}}/customer/orders?limit=20&cursor=",
+              "host": ["{{api_url}}"],
+              "path": ["customer", "orders"],
+              "query": [
+                { "key": "limit", "value": "20" },
+                { "key": "cursor", "value": "", "description": "Cursor-based pagination — omit for first page" },
+                { "key": "status", "value": "", "disabled": true, "description": "Filter by status" }
+              ]
+            },
+            "description": "Paginated list of the authenticated customer's orders. Role: `customer`. Cursor-based pagination (max 100)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Payments",
+      "description": "Kashier v3 payment sessions, transactions, refunds, and webhook ingestion.",
+      "item": [
+        {
+          "name": "Init Payment (Create Kashier Session)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}" },
+              { "key": "Idempotency-Key", "value": "{{idempotency_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"{{order_public_id}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{api_url}}/payments/init", "host": ["{{api_url}}"], "path": ["payments", "init"] },
+            "description": "Creates a Kashier hosted-payment session for the given order. Role: `customer`. Idempotent.\n\nReturns a `sessionUrl` for the customer to redirect to."
+          }
+        },
+        {
+          "name": "Get Payments for Order",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}" }
+            ],
+            "url": {
+              "raw": "{{api_url}}/payments/orders/{{order_public_id}}",
+              "host": ["{{api_url}}"],
+              "path": ["payments", "orders", "{{order_public_id}}"]
+            },
+            "description": "List all transactions for a given order UUID. Customer sees own orders; admin sees all."
+          }
+        },
+        {
+          "name": "Get Payment by ID",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}" }
+            ],
+            "url": {
+              "raw": "{{api_url}}/payments/{{payment_id}}",
+              "host": ["{{api_url}}"],
+              "path": ["payments", "{{payment_id}}"]
+            },
+            "description": "Fetch a single payment transaction by its UUID. Owner or admin."
+          }
+        },
+        {
+          "name": "Refund Payment (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}" },
+              { "key": "Idempotency-Key", "value": "{{idempotency_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Customer requested cancellation\",\n  \"amount\": null\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{api_url}}/payments/{{payment_id}}/refund",
+              "host": ["{{api_url}}"],
+              "path": ["payments", "{{payment_id}}", "refund"]
+            },
+            "description": "Initiate a refund. Role: `system_admin`. Returns 202 Accepted (async via outbox).\n\n`amount` – minor units (piastres/halalas). Omit for full refund."
+          }
+        },
+        {
+          "name": "Kashier Webhook",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"KASHIER_ORDER_ID\",\n  \"status\": \"SUCCESS\",\n  \"transactionId\": \"TXN_123\",\n  \"amount\": \"100.00\",\n  \"currency\": \"EGP\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{api_url}}/payments/webhook/kashier",
+              "host": ["{{api_url}}"],
+              "path": ["payments", "webhook", "kashier"]
+            },
+            "description": "Kashier-delivered webhook — **no JWT auth**. Signature is verified by HMAC-SHA256 using `KASHIER_WEBHOOK_SECRET` inside the handler.\n\nBody is received as raw Buffer; do not alter `Content-Type`."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Deliveries",
+      "description": "Admin-driven delivery assignment and agent-driven delivery status updates.",
+      "item": [
+        {
+          "name": "Assign Delivery (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"agentId\": 1\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{api_url}}/deliveries/assign/{{order_public_id}}",
+              "host": ["{{api_url}}"],
+              "path": ["deliveries", "assign", "{{order_public_id}}"]
+            },
+            "description": "Assign a delivery agent to a ready order. Role: `system_admin`. Region must be concrete (not `all`).\n\n`agentId` – optional; omit for auto-assignment from nearby agents."
+          }
+        },
+        {
+          "name": "Reassign Delivery (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"agentId\": 2\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{api_url}}/deliveries/reassign/{{order_public_id}}",
+              "host": ["{{api_url}}"],
+              "path": ["deliveries", "reassign", "{{order_public_id}}"]
+            },
+            "description": "Reassign delivery to a different agent. Inserts a new `deliveries` row with `reassigned_from` set; never mutates the old row. Role: `system_admin`."
+          }
+        },
+        {
+          "name": "Update Delivery Status (Agent)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}" },
+              { "key": "Idempotency-Key", "value": "{{idempotency_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"accepted\",\n  \"reason\": null\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{api_url}}/deliveries/{{delivery_id}}/status",
+              "host": ["{{api_url}}"],
+              "path": ["deliveries", "{{delivery_id}}", "status"]
+            },
+            "description": "Agent updates their active delivery. Role: `delivery_agent`.\n\n**status** values: `accepted` | `rejected` | `picked` | `delivered`"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Agents",
+      "description": "Delivery agent presence management, task list, and earnings.",
+      "item": [
+        {
+          "name": "Go Online",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"lat\": 30.0444,\n  \"lng\": 31.2357\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{api_url}}/agents/presence/online", "host": ["{{api_url}}"], "path": ["agents", "presence", "online"] },
+            "description": "Mark agent as online and set initial location. Role: `delivery_agent`."
+          }
+        },
+        {
+          "name": "Go Offline",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}" }
+            ],
+            "url": { "raw": "{{api_url}}/agents/presence/offline", "host": ["{{api_url}}"], "path": ["agents", "presence", "offline"] },
+            "description": "Mark agent as offline. Role: `delivery_agent`."
+          }
+        },
+        {
+          "name": "Presence Ping",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"lat\": 30.0500,\n  \"lng\": 31.2400\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{api_url}}/agents/presence/ping", "host": ["{{api_url}}"], "path": ["agents", "presence", "ping"] },
+            "description": "Heartbeat + location update. Resets the 90-second presence TTL. Role: `delivery_agent`."
+          }
+        },
+        {
+          "name": "Get My Tasks",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}" }
+            ],
+            "url": { "raw": "{{api_url}}/agents/tasks", "host": ["{{api_url}}"], "path": ["agents", "tasks"] },
+            "description": "List active and recent deliveries for the authenticated agent. Role: `delivery_agent`."
+          }
+        },
+        {
+          "name": "Get My Earnings",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}" }
+            ],
+            "url": {
+              "raw": "{{api_url}}/agents/earnings?limit=20&cursor=",
+              "host": ["{{api_url}}"],
+              "path": ["agents", "earnings"],
+              "query": [
+                { "key": "limit", "value": "20" },
+                { "key": "cursor", "value": "" }
+              ]
+            },
+            "description": "Paginated earnings history for the authenticated agent. Role: `delivery_agent`."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Restaurant Orders",
+      "description": "Restaurant dashboard: view and update incoming orders for a branch.",
+      "item": [
+        {
+          "name": "List Restaurant Orders",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}" }
+            ],
+            "url": {
+              "raw": "{{api_url}}/restaurant/orders?limit=20&cursor=&status=placed",
+              "host": ["{{api_url}}"],
+              "path": ["restaurant", "orders"],
+              "query": [
+                { "key": "limit", "value": "20" },
+                { "key": "cursor", "value": "" },
+                { "key": "status", "value": "placed", "description": "Filter by status" },
+                { "key": "branchId", "value": "", "disabled": true }
+              ]
+            },
+            "description": "List orders for the authenticated restaurant member's branch(es). Role: `restaurant_user`. RBAC resource: `orders` action: `read`."
+          }
+        },
+        {
+          "name": "Update Restaurant Order Status",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}" },
+              { "key": "Idempotency-Key", "value": "{{idempotency_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"preparing\",\n  \"estimatedDeliveryAt\": \"2026-05-25T14:30:00.000Z\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{api_url}}/restaurant/orders/{{order_public_id}}/status",
+              "host": ["{{api_url}}"],
+              "path": ["restaurant", "orders", "{{order_public_id}}", "status"]
+            },
+            "description": "Restaurant staff update order status. Role: `restaurant_user`.\n\n**status** values: `accepted` | `rejected` | `preparing` | `ready` | `cancelled`"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Restaurant Finance",
+      "description": "Restaurant balance and payout history.",
+      "item": [
+        {
+          "name": "Get My Balance",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}" }
+            ],
+            "url": { "raw": "{{api_url}}/restaurant/finance/balance", "host": ["{{api_url}}"], "path": ["restaurant", "finance", "balance"] },
+            "description": "Current restaurant balance (minor units). Short TTL cache (5s). Role: `restaurant_user`. RBAC resource: `finance` action: `read`."
+          }
+        },
+        {
+          "name": "List My Payouts",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}" }
+            ],
+            "url": {
+              "raw": "{{api_url}}/restaurant/finance/payouts?limit=20&cursor=",
+              "host": ["{{api_url}}"],
+              "path": ["restaurant", "finance", "payouts"],
+              "query": [
+                { "key": "limit", "value": "20" },
+                { "key": "cursor", "value": "" }
+              ]
+            },
+            "description": "Paginated payout history for the restaurant. Role: `restaurant_user`. RBAC resource: `finance` action: `read`."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin",
+      "description": "System admin endpoints — read across regions, force status, payout management, ops visibility.",
+      "item": [
+        {
+          "name": "List All Orders",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}", "description": "Use 'all' for cross-region fan-out" }
+            ],
+            "url": {
+              "raw": "{{api_url}}/admin/orders?limit=20&cursor=",
+              "host": ["{{api_url}}"],
+              "path": ["admin", "orders"],
+              "query": [
+                { "key": "limit", "value": "20" },
+                { "key": "cursor", "value": "" },
+                { "key": "status", "value": "", "disabled": true },
+                { "key": "restaurantId", "value": "", "disabled": true },
+                { "key": "customerId", "value": "", "disabled": true }
+              ]
+            },
+            "description": "List all orders. Role: `system_admin`. Supports `X-Region: all` for cross-region reads."
+          }
+        },
+        {
+          "name": "List All Transactions",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}" }
+            ],
+            "url": {
+              "raw": "{{api_url}}/admin/transactions?limit=20&cursor=",
+              "host": ["{{api_url}}"],
+              "path": ["admin", "transactions"],
+              "query": [
+                { "key": "limit", "value": "20" },
+                { "key": "cursor", "value": "" }
+              ]
+            },
+            "description": "List payment transactions. Role: `system_admin`."
+          }
+        },
+        {
+          "name": "List Restaurant Balances",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}" }
+            ],
+            "url": {
+              "raw": "{{api_url}}/admin/restaurant-balances?limit=20&cursor=",
+              "host": ["{{api_url}}"],
+              "path": ["admin", "restaurant-balances"],
+              "query": [
+                { "key": "limit", "value": "20" },
+                { "key": "cursor", "value": "" }
+              ]
+            },
+            "description": "List restaurant balance rows. Role: `system_admin`."
+          }
+        },
+        {
+          "name": "List Agents",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}" }
+            ],
+            "url": {
+              "raw": "{{api_url}}/admin/agents?limit=20&cursor=",
+              "host": ["{{api_url}}"],
+              "path": ["admin", "agents"],
+              "query": [
+                { "key": "limit", "value": "20" },
+                { "key": "cursor", "value": "" },
+                { "key": "online", "value": "true", "disabled": true }
+              ]
+            },
+            "description": "List delivery agents with presence data. Role: `system_admin`."
+          }
+        },
+        {
+          "name": "Force Update Order Status (Admin)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}", "description": "Must be a concrete region, not 'all'" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"cancelled\",\n  \"reason\": \"Admin intervention\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{api_url}}/admin/orders/{{order_public_id}}/status",
+              "host": ["{{api_url}}"],
+              "path": ["admin", "orders", "{{order_public_id}}", "status"]
+            },
+            "description": "Override order status with no transition guard. Role: `system_admin`. Region must be concrete.\n\n**status** values: `accepted` | `rejected` | `preparing` | `ready` | `cancelled`"
+          }
+        },
+        {
+          "name": "Create Payout (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}", "description": "Must be a concrete region, not 'all'" },
+              { "key": "Idempotency-Key", "value": "{{idempotency_key}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"restaurantId\": 1,\n  \"amount\": 50000,\n  \"currency\": \"EGP\",\n  \"providerReferenceId\": \"BANK_TXN_REF_001\",\n  \"note\": \"Monthly settlement\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{api_url}}/admin/restaurant/payouts", "host": ["{{api_url}}"], "path": ["admin", "restaurant", "payouts"] },
+            "description": "Record a restaurant payout. Role: `system_admin`. Idempotent.\n\n`amount` – minor currency units (e.g. 50000 = 500.00 EGP).\n`currency` – `EGP` | `SAR`."
+          }
+        },
+        {
+          "name": "Dead-Letter Outbox",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Cookie", "value": "access_token={{access_token}}" },
+              { "key": "X-Region", "value": "{{region}}", "description": "Must be a concrete region" }
+            ],
+            "url": {
+              "raw": "{{api_url}}/admin/outbox/dead-letters?limit=20&cursor=",
+              "host": ["{{api_url}}"],
+              "path": ["admin", "outbox", "dead-letters"],
+              "query": [
+                { "key": "limit", "value": "20" },
+                { "key": "cursor", "value": "" }
+              ]
+            },
+            "description": "Outbox rows that have exhausted all dispatch attempts. Ops visibility. Role: `system_admin`."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Internal",
+      "description": "Service-to-service webhooks authenticated via HMAC-SHA256 (no JWT). The pre-request script auto-computes `X-Internal-Signature` and `X-Internal-Timestamp` using `internal_hmac_secret` from your environment.",
+      "item": [
+        {
+          "name": "Core Event Webhook",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const secret = pm.environment.get('internal_hmac_secret');",
+                  "if (!secret) { console.warn('internal_hmac_secret not set — request will be rejected'); return; }",
+                  "const ts = Date.now().toString();",
+                  "const method = 'POST';",
+                  "const path = '/api/internal/webhooks/core';",
+                  "const sig = CryptoJS.HmacSHA256(`${ts}:${method}:${path}`, secret).toString(CryptoJS.enc.Hex);",
+                  "pm.request.headers.upsert({ key: 'X-Internal-Timestamp', value: ts });",
+                  "pm.request.headers.upsert({ key: 'X-Internal-Signature', value: sig });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Internal-Timestamp", "value": "{{internal_timestamp}}", "description": "Auto-set by pre-request script" },
+              { "key": "X-Internal-Signature", "value": "{{internal_signature}}", "description": "Auto-set by pre-request script" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"eventType\": \"rbac.permissions_changed\",\n  \"payload\": {\n    \"roleName\": \"restaurant_user\"\n  }\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{api_url}}/internal/webhooks/core", "host": ["{{api_url}}"], "path": ["internal", "webhooks", "core"] },
+            "description": "Receives internal events from the core service. No JWT auth — uses HMAC-SHA256 with `INTERNAL_HMAC_SECRET`.\n\nSignature computed as: `HMAC-SHA256(secret, \"{timestamp}:{METHOD}:{path}\")`\n\n**Known eventTypes:**\n- `rbac.permissions_changed` – invalidates the permission cache for a role"
+          }
+        }
+      ]
+    }
+  ]
+}
