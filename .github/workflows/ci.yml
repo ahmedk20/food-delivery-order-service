@@ -33,7 +33,34 @@ jobs:
         run: npm run build
 
   # ---------------------------------------------------------------------------
-  # Job 2: prove the migrations build a valid schema on an EMPTY shard.
+  # Job 2: run the test suite. Our tests are fully mocked (src/__tests__/setup.ts
+  # stubs the DB, Redis, RabbitMQ, WebSocket and payment provider), so they need
+  # NO service containers — just install and run. That's why this job is even
+  # shorter than the mentor's: his integration tests hit a real Postgres/Redis.
+  # ---------------------------------------------------------------------------
+  test:
+    name: Tests (vitest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `npm run test` == `vitest run`. setup.ts forces APP_STAGE=test and mocks
+      # all I/O, so this runs in-process with no database or broker.
+      - name: Run tests
+        run: npm run test
+
+  # ---------------------------------------------------------------------------
+  # Job 3: prove the migrations build a valid schema on an EMPTY shard.
   #
   # Unlike core-service, we can't use GitHub's native `services:` block: the
   # migrations call `CREATE EXTENSION pg_partman`, which no public Postgres
