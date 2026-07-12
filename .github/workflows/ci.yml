@@ -1,0 +1,102 @@
+# CI for order-service. Runs on every push/PR to main.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: type-check + compile. Identical to core-service — a broken import or
+  # type error fails the build before it can merge.
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build & Type-check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (type-check + compile)
+        run: npm run build
+
+  # ---------------------------------------------------------------------------
+  # Job 2: prove the migrations build a valid schema on an EMPTY shard.
+  #
+  # Unlike core-service, we can't use GitHub's native `services:` block: the
+  # migrations call `CREATE EXTENSION pg_partman`, which no public Postgres
+  # image ships. `services:` only accepts a pullable image, so instead we
+  # BUILD our own Postgres image (docker/postgres) and run it in a step.
+  #
+  # order-service is also SHARDED by region: the knexfile targets a DB via
+  # REGION + DB_<REGION>_* env vars. In CI we migrate one region's hot shard
+  # (eg), which is where the partitioned tables live — enough to prove the
+  # schema is valid. (Add more REGIONs the same way if you want.)
+  # ---------------------------------------------------------------------------
+  migrations:
+    name: Run migrations on a clean DB (region eg)
+    runs-on: ubuntu-latest
+
+    # The order-service knexfile reads these directly — it does NOT import the
+    # app's env.ts, so no JWT/HMAC secrets are needed just to migrate.
+    env:
+      APP_STAGE: test          # avoids loading .env.dev
+      REGION: eg               # which shard the knexfile targets
+      CLUSTER: hot             # hot vs archive cluster (default is hot)
+      DB_EG_HOST: localhost
+      DB_EG_PORT: "5432"
+      DB_EG_NAME: order_service_eg
+      DB_EG_USER: postgres
+      DB_EG_PASSWORD: postgres
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Build the Postgres image that bundles pg_partman (see docker/postgres).
+      - name: Build Postgres image (with pg_partman)
+        run: docker build -t qb-order-pg ./docker/postgres
+
+      # Start it detached, publishing 5432 on the runner's localhost.
+      - name: Start Postgres
+        run: |
+          docker run -d --name qb-order-pg \
+            -e POSTGRES_USER=postgres \
+            -e POSTGRES_PASSWORD=postgres \
+            -p 5432:5432 qb-order-pg
+
+      # Wait until Postgres accepts connections, then create the empty shard DB
+      # the knexfile expects (DB_EG_NAME).
+      - name: Wait for Postgres & create shard DB
+        run: |
+          for i in $(seq 1 20); do
+            if docker exec qb-order-pg pg_isready -U postgres; then break; fi
+            sleep 2
+          done
+          docker exec qb-order-pg psql -U postgres -c "CREATE DATABASE order_service_eg;"
+
+      # Call knex directly (not migrate:all) so we control REGION/CLUSTER and
+      # stay pointed at the throwaway DB above.
+      - name: Run migrations
+        run: npx tsx ./node_modules/knex/bin/cli.js --knexfile src/lib/knex/knexfile.ts migrate:latest
