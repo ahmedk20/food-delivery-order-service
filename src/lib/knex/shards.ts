@@ -21,6 +21,9 @@ function create(region: string, tier: 'hot' | 'archive'): Knex {
             database: conn.database,
             user:     conn.user,
             password: conn.password,
+            // AWS RDS forces SSL. Enable it in production (trust the RDS-managed
+            // cert); locally/tests the throwaway Postgres speaks plaintext.
+            ssl:      env.stage === 'production' ? { rejectUnauthorized: false } : false,
         },
         pool: {
             min: env.db.poolMin,

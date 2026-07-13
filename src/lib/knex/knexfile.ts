@@ -37,9 +37,14 @@ if (!host || !database || !user) {
     process.exit(1);
 }
 
+// AWS RDS forces SSL. In production connect with SSL; `rejectUnauthorized: false`
+// trusts the RDS-managed cert without shipping a CA bundle. Locally (dev/test) the
+// throwaway Postgres speaks plaintext, so SSL stays off.
+const isProd = stage === 'production';
+
 const knexConfig: Knex.Config = {
     client: 'pg',
-    connection: { host, port, database, user, password },
+    connection: { host, port, database, user, password, ssl: isProd ? { rejectUnauthorized: false } : false },
     pool: { min: 1, max: 2 },
     migrations: {
         directory: path.resolve(__dirname, '../../../src/database/migrations'),

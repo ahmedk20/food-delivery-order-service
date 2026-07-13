@@ -13,6 +13,7 @@
     "migrate:rollback": "cross-env APP_STAGE=dev tsx ./node_modules/knex/bin/cli.js --knexfile src/lib/knex/knexfile.ts migrate:rollback",
     "migrate:down": "cross-env APP_STAGE=dev tsx ./node_modules/knex/bin/cli.js --knexfile src/lib/knex/knexfile.ts migrate:down",
     "migrate:all": "tsx scripts/migrate-all.ts",
+    "migrate:all:prod": "cross-env APP_STAGE=production tsx scripts/migrate-all.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
