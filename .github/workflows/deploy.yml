@@ -1,0 +1,74 @@
+name: Deploy
+
+# Runs on every push to main. Test job gates the deploy job (needs: test),
+# so a failing test blocks the deployment.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write   # required for GitHub -> AWS OIDC (no stored AWS keys)
+  contents: read
+
+env:
+  AWS_REGION: eu-north-1
+  ECR_REPO: order-service
+  ECS_SERVICE: order-service
+  MIGRATE_TASKDEF: order-migrate
+  CLUSTER: quickbite-1
+  SUBNETS: "subnet-008b03ca2d4c1915b,subnet-067d4393573dff52a"
+  ECS_SG: sg-08273140b1531de10
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+  deploy:
+    name: Build, migrate, deploy
+    needs: test            # deploy only runs if tests pass
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::078346805718:role/github_deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push image
+        run: |
+          REG=${{ steps.ecr.outputs.registry }}
+          docker build -t $REG/${{ env.ECR_REPO }}:${{ github.sha }} -t $REG/${{ env.ECR_REPO }}:latest .
+          docker push $REG/${{ env.ECR_REPO }} --all-tags
+
+      - name: Run migrations (one-off Fargate task, gated on exit 0)
+        run: |
+          ARN=$(aws ecs run-task --cluster ${{ env.CLUSTER }} \
+            --task-definition ${{ env.MIGRATE_TASKDEF }} --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[${{ env.SUBNETS }}],securityGroups=[${{ env.ECS_SG }}],assignPublicIp=DISABLED}" \
+            --query 'tasks[0].taskArn' --output text)
+          echo "migrate task: $ARN"
+          aws ecs wait tasks-stopped --cluster ${{ env.CLUSTER }} --tasks $ARN
+          CODE=$(aws ecs describe-tasks --cluster ${{ env.CLUSTER }} --tasks $ARN \
+            --query 'tasks[0].containers[0].exitCode' --output text)
+          echo "migrate exit code: $CODE"
+          test "$CODE" = "0"
+
+      - name: Roll out new version (zero-downtime)
+        run: aws ecs update-service --cluster ${{ env.CLUSTER }} --service ${{ env.ECS_SERVICE }} --force-new-deployment
